@@ -2,11 +2,17 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
+import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, getUserAuthStatus } from "./feishuClient.js";
 import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
   res.end(JSON.stringify(payload));
+}
+
+function sendHtml(res, statusCode, html) {
+  res.writeHead(statusCode, { "content-type": "text/html; charset=utf-8" });
+  res.end(html);
 }
 
 async function readBody(req) {
@@ -85,6 +91,55 @@ async function handleBitableSync(req, res, url) {
   return sendJson(res, 200, result);
 }
 
+function assertDebugToken(req, url) {
+  const token = url.searchParams.get("token") || req.headers["x-debug-token"];
+  if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
+    return false;
+  }
+  return true;
+}
+
+function getPublicBaseUrl(req) {
+  const forwardedProto = req.headers["x-forwarded-proto"];
+  const proto = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto || "https";
+  return `${proto}://${req.headers.host}`;
+}
+
+function handleOAuthStart(req, res, url) {
+  if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
+
+  const redirectUri = `${getPublicBaseUrl(req)}/oauth/feishu/callback`;
+  const state = createOAuthState();
+  const authUrl = buildFeishuOAuthUrl({ redirectUri, state });
+  appendLog({ type: "oauth_start", redirectUri });
+
+  return sendHtml(res, 200, `<!doctype html>
+<html><body style="font-family:Arial,'Microsoft YaHei',sans-serif;line-height:1.7;padding:32px;">
+  <h2>飞书邮箱授权</h2>
+  <p>请使用客户公用发件邮箱账号完成授权。</p>
+  <p>如果提示 redirect_uri 不匹配，请先在飞书开放平台添加：</p>
+  <pre>${escapeHtml(redirectUri)}</pre>
+  <p><a href="${escapeHtml(authUrl)}">点击开始授权</a></p>
+</body></html>`);
+}
+
+async function handleOAuthCallback(req, res, url) {
+  const code = url.searchParams.get("code");
+  if (!code) {
+    return sendHtml(res, 400, "<p>授权失败：没有收到 code。</p>");
+  }
+
+  const redirectUri = `${getPublicBaseUrl(req)}/oauth/feishu/callback`;
+  const token = await exchangeOAuthCode({ code, redirectUri });
+  appendLog({ type: "oauth_callback", status: "authorized", refreshTokenExpiresAt: token.refresh_token_expires_at });
+
+  return sendHtml(res, 200, `<!doctype html>
+<html><body style="font-family:Arial,'Microsoft YaHei',sans-serif;line-height:1.7;padding:32px;">
+  <h2>授权成功</h2>
+  <p>飞书邮箱用户授权已保存。现在可以回到 Codex 继续测试真实发信。</p>
+</body></html>`);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -96,7 +151,8 @@ const server = http.createServer(async (req, res) => {
         missingConfig: missingRequiredConfig(),
         safeTestMode: config.safeTestMode,
         emailDryRun: config.emailDryRun,
-        bitableConfigured: Boolean(config.bitable.appToken && config.bitable.tableId)
+        bitableConfigured: Boolean(config.bitable.appToken && config.bitable.tableId),
+        userMailAuth: getUserAuthStatus()
       });
     }
 
@@ -120,6 +176,14 @@ const server = http.createServer(async (req, res) => {
       return handleBitableSync(req, res, url);
     }
 
+    if (req.method === "GET" && url.pathname === "/oauth/feishu/start") {
+      return handleOAuthStart(req, res, url);
+    }
+
+    if (req.method === "GET" && url.pathname === "/oauth/feishu/callback") {
+      return handleOAuthCallback(req, res, url);
+    }
+
     return sendJson(res, 404, { error: "not found" });
   } catch (error) {
     appendLog({ type: "error", message: error.message, stack: error.stack });
@@ -130,3 +194,12 @@ const server = http.createServer(async (req, res) => {
 server.listen(config.port, () => {
   console.log(`Feishu mail automation service listening on http://localhost:${config.port}`);
 });
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
