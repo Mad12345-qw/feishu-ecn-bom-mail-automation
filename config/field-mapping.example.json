@@ -1,0 +1,12 @@
+{
+  "projectNameOrCode": "项目名称及项目编号",
+  "version": "版本号",
+  "brand": "项目品牌",
+  "phase": "项目阶段",
+  "assemblyFactory": "组装工厂",
+  "bomType": "BOM类型",
+  "changeLog": "变更记录",
+  "bomAttachments": "BOM释放附件下载链接",
+  "previousBomRecord": "上一个版本BOM释放记录",
+  "ecnAttachments": "ECN变更通知书附件"
+}

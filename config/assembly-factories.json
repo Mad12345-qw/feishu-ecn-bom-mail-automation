@@ -1,0 +1,12 @@
+{
+  "奥海": {
+    "to": ["factory-aohai@example.com"],
+    "cc": [],
+    "enabled": true
+  },
+  "示例组装厂": {
+    "to": ["factory@example.com"],
+    "cc": ["pm@example.com"],
+    "enabled": true
+  }
+}
