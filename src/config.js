@@ -40,6 +40,7 @@ export const config = {
     senderDisplayName: process.env.FEISHU_SENDER_DISPLAY_NAME || "BOM释放通知"
   },
   safeTestMode: String(process.env.SAFE_TEST_MODE || "true").toLowerCase() !== "false",
+  emailDryRun: String(process.env.EMAIL_DRY_RUN || "true").toLowerCase() !== "false",
   testRecipients: (process.env.TEST_RECIPIENTS || "")
     .split(",")
     .map((item) => item.trim().toLowerCase())

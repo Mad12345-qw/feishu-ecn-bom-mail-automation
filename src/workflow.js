@@ -90,6 +90,17 @@ export async function processBusinessRecord(record) {
   const subject = `BOM释放通知 - ${project}${version ? ` - ${version}` : ""}`;
   const html = buildMailHtml(record);
 
+  if (config.emailDryRun) {
+    return {
+      status: "dry_run_ready",
+      assemblyFactory: route.assemblyFactory,
+      to: route.to,
+      cc: route.cc,
+      subject,
+      htmlPreview: html.slice(0, 300)
+    };
+  }
+
   const result = await sendFeishuMail({
     to: route.to,
     cc: route.cc,

@@ -83,7 +83,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         service: "feishu-ecn-bom-mail-automation",
         missingConfig: missingRequiredConfig(),
-        safeTestMode: config.safeTestMode
+        safeTestMode: config.safeTestMode,
+        emailDryRun: config.emailDryRun
       });
     }
 
