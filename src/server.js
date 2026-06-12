@@ -17,6 +17,7 @@ async function readBody(req) {
 }
 
 function appendLog(entry) {
+  fs.mkdirSync(path.join(config.rootDir, "logs"), { recursive: true });
   const logPath = path.join(config.rootDir, "logs", "events.jsonl");
   const payload = { time: new Date().toISOString(), ...entry };
   fs.appendFileSync(logPath, `${JSON.stringify(payload)}\n`, "utf8");
