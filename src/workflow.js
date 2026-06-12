@@ -1,7 +1,9 @@
+import crypto from "node:crypto";
 import { config } from "./config.js";
-import { sendFeishuMail } from "./feishuClient.js";
+import { feishuApi, sendFeishuMail } from "./feishuClient.js";
 
 const processedEventIds = new Set();
+const processedRecordFingerprints = new Set();
 
 function getField(source, key) {
   const fieldName = config.fieldMapping[key] || key;
@@ -114,6 +116,56 @@ export async function processBusinessRecord(record) {
     to: route.to,
     cc: route.cc,
     result
+  };
+}
+
+export function createRecordFingerprint(recordId, fields) {
+  return crypto
+    .createHash("sha256")
+    .update(`${recordId}:${JSON.stringify(fields || {})}`)
+    .digest("hex");
+}
+
+export async function syncConfiguredBitableRecords() {
+  if (!config.bitable.appToken || !config.bitable.tableId) {
+    return {
+      status: "blocked",
+      reason: "Missing BITABLE_APP_TOKEN or BITABLE_TABLE_ID"
+    };
+  }
+
+  const data = await feishuApi(
+    `/bitable/v1/apps/${encodeURIComponent(config.bitable.appToken)}/tables/${encodeURIComponent(config.bitable.tableId)}/records?page_size=100`
+  );
+
+  const items = data.data?.items || [];
+  const results = [];
+
+  for (const item of items) {
+    const fields = item.fields || {};
+    const recordId = item.record_id || item.id || "";
+
+    if (!Object.keys(fields).length) {
+      results.push({ recordId, status: "skipped_empty" });
+      continue;
+    }
+
+    const fingerprint = createRecordFingerprint(recordId, fields);
+    if (processedRecordFingerprints.has(fingerprint)) {
+      results.push({ recordId, status: "skipped_duplicate" });
+      continue;
+    }
+
+    processedRecordFingerprints.add(fingerprint);
+    const result = await processBusinessRecord(fields);
+    results.push({ recordId, result });
+  }
+
+  return {
+    status: "synced",
+    total: items.length,
+    processed: results.filter((item) => item.result).length,
+    results
   };
 }
 

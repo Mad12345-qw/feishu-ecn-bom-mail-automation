@@ -26,3 +26,7 @@ services:
         value: BOM释放通知
       - key: TEST_RECIPIENTS
         sync: false
+      - key: BITABLE_APP_TOKEN
+        sync: false
+      - key: BITABLE_TABLE_ID
+        sync: false

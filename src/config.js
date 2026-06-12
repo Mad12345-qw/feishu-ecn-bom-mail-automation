@@ -39,6 +39,10 @@ export const config = {
     senderMailboxId: process.env.FEISHU_SENDER_MAILBOX_ID || "",
     senderDisplayName: process.env.FEISHU_SENDER_DISPLAY_NAME || "BOM释放通知"
   },
+  bitable: {
+    appToken: process.env.BITABLE_APP_TOKEN || "",
+    tableId: process.env.BITABLE_TABLE_ID || ""
+  },
   safeTestMode: String(process.env.SAFE_TEST_MODE || "true").toLowerCase() !== "false",
   emailDryRun: String(process.env.EMAIL_DRY_RUN || "true").toLowerCase() !== "false",
   testRecipients: (process.env.TEST_RECIPIENTS || "")

@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
-import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent } from "./workflow.js";
+import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -74,6 +74,17 @@ async function handleDemoSend(req, res) {
   return sendJson(res, 200, result);
 }
 
+async function handleBitableSync(req, res, url) {
+  const token = url.searchParams.get("token") || req.headers["x-debug-token"];
+  if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
+    return sendJson(res, 403, { error: "forbidden" });
+  }
+
+  const result = await syncConfiguredBitableRecords();
+  appendLog({ type: "bitable_sync", result });
+  return sendJson(res, 200, result);
+}
+
 const server = http.createServer(async (req, res) => {
   try {
     const url = new URL(req.url, `http://${req.headers.host}`);
@@ -84,7 +95,8 @@ const server = http.createServer(async (req, res) => {
         service: "feishu-ecn-bom-mail-automation",
         missingConfig: missingRequiredConfig(),
         safeTestMode: config.safeTestMode,
-        emailDryRun: config.emailDryRun
+        emailDryRun: config.emailDryRun,
+        bitableConfigured: Boolean(config.bitable.appToken && config.bitable.tableId)
       });
     }
 
@@ -102,6 +114,10 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "POST" && url.pathname === "/demo/send") {
       return handleDemoSend(req, res);
+    }
+
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/sync/bitable") {
+      return handleBitableSync(req, res, url);
     }
 
     return sendJson(res, 404, { error: "not found" });
