@@ -23,6 +23,22 @@ function appendLog(entry) {
   console.log(JSON.stringify(payload));
 }
 
+function readRecentEvents() {
+  const logPath = path.join(config.rootDir, "logs", "events.jsonl");
+  if (!fs.existsSync(logPath)) return [];
+  return fs.readFileSync(logPath, "utf8")
+    .split(/\r?\n/)
+    .filter(Boolean)
+    .slice(-50)
+    .map((line) => {
+      try {
+        return JSON.parse(line);
+      } catch {
+        return { raw: line };
+      }
+    });
+}
+
 async function handleFeishuWebhook(req, res) {
   const body = await readBody(req);
 
@@ -68,6 +84,14 @@ const server = http.createServer(async (req, res) => {
         missingConfig: missingRequiredConfig(),
         safeTestMode: config.safeTestMode
       });
+    }
+
+    if (req.method === "GET" && url.pathname === "/debug/events") {
+      const token = url.searchParams.get("token") || req.headers["x-debug-token"];
+      if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
+        return sendJson(res, 403, { error: "forbidden" });
+      }
+      return sendJson(res, 200, { events: readRecentEvents() });
     }
 
     if (req.method === "POST" && url.pathname === "/webhook/feishu") {
