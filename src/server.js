@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
-import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, getUserAuthStatus } from "./feishuClient.js";
+import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
 import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
@@ -91,6 +91,20 @@ async function handleBitableSync(req, res, url) {
   return sendJson(res, 200, result);
 }
 
+async function handleTestMail(req, res, url) {
+  if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
+  if (!config.testRecipients.length) return sendJson(res, 400, { error: "TEST_RECIPIENTS is empty" });
+
+  const result = await sendFeishuMail({
+    to: config.testRecipients,
+    subject: `BOM邮件自动化真实发信测试 - ${new Date().toISOString()}`,
+    html: `<p>这是一封飞书邮箱 API 真实发信测试邮件。</p>
+<p>如果收到，说明客户飞书邮箱发信链路已经打通。</p>`
+  });
+  appendLog({ type: "test_mail", to: config.testRecipients, result });
+  return sendJson(res, 200, { status: "sent", to: config.testRecipients, result });
+}
+
 function assertDebugToken(req, url) {
   const token = url.searchParams.get("token") || req.headers["x-debug-token"];
   if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
@@ -174,6 +188,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/sync/bitable") {
       return handleBitableSync(req, res, url);
+    }
+
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-test-mail") {
+      return handleTestMail(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname === "/oauth/feishu/start") {

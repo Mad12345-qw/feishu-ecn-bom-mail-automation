@@ -107,12 +107,16 @@ export async function refreshUserAccessToken(refreshToken) {
 
 export async function getUserAccessToken() {
   const stored = readUserToken();
-  if (!stored?.refresh_token) {
+  if (!stored?.access_token && !stored?.refresh_token) {
     throw new Error("Missing Feishu user authorization. Open /oauth/feishu/start first.");
   }
 
   if (stored.access_token && stored.access_token_expires_at > Date.now() + 60_000) {
     return stored.access_token;
+  }
+
+  if (!stored.refresh_token) {
+    throw new Error("Feishu user access token expired and no refresh token was returned. Please reauthorize.");
   }
 
   const refreshed = await refreshUserAccessToken(stored.refresh_token);
@@ -122,7 +126,7 @@ export async function getUserAccessToken() {
 export function getUserAuthStatus() {
   const stored = readUserToken();
   return {
-    authorized: Boolean(stored?.refresh_token),
+    authorized: Boolean(stored?.access_token || stored?.refresh_token),
     accessTokenValid: Boolean(stored?.access_token && stored.access_token_expires_at > Date.now() + 60_000),
     refreshTokenValid: Boolean(stored?.refresh_token && stored.refresh_token_expires_at > Date.now() + 60_000)
   };
