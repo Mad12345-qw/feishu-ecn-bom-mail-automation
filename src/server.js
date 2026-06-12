@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
-import { mapFeishuEventToRecord, processBusinessRecord } from "./workflow.js";
+import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -18,7 +18,9 @@ async function readBody(req) {
 
 function appendLog(entry) {
   const logPath = path.join(config.rootDir, "logs", "events.jsonl");
-  fs.appendFileSync(logPath, `${JSON.stringify({ time: new Date().toISOString(), ...entry })}\n`, "utf8");
+  const payload = { time: new Date().toISOString(), ...entry };
+  fs.appendFileSync(logPath, `${JSON.stringify(payload)}\n`, "utf8");
+  console.log(JSON.stringify(payload));
 }
 
 async function handleFeishuWebhook(req, res) {
@@ -35,9 +37,16 @@ async function handleFeishuWebhook(req, res) {
     return sendJson(res, 403, { error: "invalid event token" });
   }
 
+  const summary = summarizeFeishuEvent(body);
+  if (isDuplicateEvent(summary.eventId)) {
+    const duplicate = { status: "duplicate_ignored", eventId: summary.eventId, eventType: summary.eventType };
+    appendLog({ type: "feishu_webhook", summary, result: duplicate });
+    return sendJson(res, 200, duplicate);
+  }
+
   const record = mapFeishuEventToRecord(body);
   const result = await processBusinessRecord(record);
-  appendLog({ type: "feishu_webhook", result });
+  appendLog({ type: "feishu_webhook", summary, result });
   return sendJson(res, 200, result);
 }
 

@@ -1,6 +1,8 @@
 import { config } from "./config.js";
 import { sendFeishuMail } from "./feishuClient.js";
 
+const processedEventIds = new Set();
+
 function getField(source, key) {
   const fieldName = config.fieldMapping[key] || key;
   return source[fieldName] ?? source[key] ?? "";
@@ -72,6 +74,10 @@ export function buildMailHtml(record) {
 }
 
 export async function processBusinessRecord(record) {
+  if (!record || !Object.keys(record).length) {
+    return { status: "received_no_business_fields", reason: "事件已接收，但暂未解析到业务字段" };
+  }
+
   const route = routeByAssemblyFactory(record);
   if (!route.ok) {
     return { status: "blocked", reason: route.reason };
@@ -104,6 +110,33 @@ export function mapFeishuEventToRecord(eventBody) {
   const event = eventBody.event || eventBody;
   const fields = event.fields || event.record?.fields || event.form || event.data || {};
   return fields && typeof fields === "object" ? fields : {};
+}
+
+export function summarizeFeishuEvent(eventBody) {
+  const header = eventBody.header || {};
+  const event = eventBody.event || eventBody;
+  const eventId = header.event_id || eventBody.uuid || event.uuid || event.instance_code || event.record_id || "";
+  const eventType = header.event_type || eventBody.type || event.type || event.event_type || "";
+  const record = mapFeishuEventToRecord(eventBody);
+
+  return {
+    eventId,
+    eventType,
+    topLevelKeys: Object.keys(eventBody || {}).slice(0, 20),
+    eventKeys: Object.keys(event || {}).slice(0, 30),
+    parsedFieldKeys: Object.keys(record || {}).slice(0, 30)
+  };
+}
+
+export function isDuplicateEvent(eventId) {
+  if (!eventId) return false;
+  if (processedEventIds.has(eventId)) return true;
+  processedEventIds.add(eventId);
+  if (processedEventIds.size > 1000) {
+    const first = processedEventIds.values().next().value;
+    processedEventIds.delete(first);
+  }
+  return false;
 }
 
 function escapeHtml(value) {
