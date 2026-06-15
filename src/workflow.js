@@ -237,7 +237,7 @@ function escapeHtml(value) {
 
 function buildSectionTable(title, rows) {
   const bodyRows = rows.map(([name, value]) => {
-    return `<tr><td style="width:32%;font-weight:500;">${escapeHtml(name)}</td><td>${formatFieldHtml(value)}</td></tr>`;
+    return `<tr><td style="width:32%;font-weight:500;">${escapeHtml(name)}</td><td>${formatFieldHtml(value, name)}</td></tr>`;
   }).join("");
 
   return `
@@ -248,11 +248,12 @@ function buildSectionTable(title, rows) {
     </table>`;
 }
 
-function formatFieldHtml(value) {
+function formatFieldHtml(value, fieldName = "") {
   if (value === undefined || value === null || value === "") return "";
   if (Array.isArray(value)) {
-    return value.map(formatFieldHtml).filter(Boolean).join("<br>");
+    return value.map((item) => formatFieldHtml(item, fieldName)).filter(Boolean).join("<br>");
   }
+  if (typeof value === "number" && fieldName.includes("日期")) return formatDate(value);
   if (typeof value === "object") {
     const text = value.name || value.text || value.value || value.file_name || value.title || value.email || JSON.stringify(value);
     const href = value.url || value.link || value.tmp_url || value.download_url;
@@ -262,6 +263,19 @@ function formatFieldHtml(value) {
     return escapeHtml(String(text));
   }
   return escapeHtml(String(value));
+}
+
+function formatDate(timestamp) {
+  const date = new Date(timestamp);
+  if (Number.isNaN(date.getTime())) return escapeHtml(String(timestamp));
+  const parts = new Intl.DateTimeFormat("zh-CN", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit"
+  }).formatToParts(date);
+  const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${values.year}-${values.month}-${values.day}`;
 }
 
 function normalizeFactoryNames(value) {
