@@ -58,6 +58,35 @@ export async function feishuApi(path, options = {}) {
   });
 }
 
+export async function downloadFeishuMedia(fileToken, fallbackName = "attachment") {
+  const token = await getTenantAccessToken();
+  const response = await fetch(`${FEISHU_BASE_URL}/drive/v1/medias/${encodeURIComponent(fileToken)}/download`, {
+    headers: {
+      authorization: `Bearer ${token}`
+    }
+  });
+  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  const content = Buffer.from(await response.arrayBuffer());
+
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const text = content.toString("utf8");
+      const data = text ? JSON.parse(text) : {};
+      message = data.msg || data.message || message;
+    } catch {
+      // Binary or empty error bodies do not need extra parsing.
+    }
+    throw new Error(`Feishu media download failed: ${message}`);
+  }
+
+  return {
+    filename: fallbackName,
+    contentType,
+    content
+  };
+}
+
 export function buildFeishuOAuthUrl({ redirectUri, state }) {
   const url = new URL(FEISHU_AUTH_URL);
   url.searchParams.set("client_id", config.feishu.appId);
@@ -163,7 +192,7 @@ export async function userFeishuApi(path, options = {}) {
   });
 }
 
-export async function sendFeishuMail({ to, cc = [], subject, html }) {
+export async function sendFeishuMail({ to, cc = [], subject, html, attachments = [] }) {
   if (!config.feishu.senderMailboxId) {
     throw new Error("Missing FEISHU_SENDER_MAILBOX_ID");
   }
@@ -174,7 +203,8 @@ export async function sendFeishuMail({ to, cc = [], subject, html }) {
     to,
     cc,
     subject,
-    html
+    html,
+    attachments
   });
 
   return userFeishuApi(`/mail/v1/user_mailboxes/${encodeURIComponent(config.feishu.senderMailboxId)}/messages/send`, {
@@ -231,7 +261,11 @@ function readUserTokenFromEnv() {
   return null;
 }
 
-function buildRawMail({ from, fromName, to, cc, subject, html }) {
+function buildRawMail({ from, fromName, to, cc, subject, html, attachments }) {
+  if (attachments.length) {
+    return buildMultipartRawMail({ from, fromName, to, cc, subject, html, attachments });
+  }
+
   const headers = [
     `From: ${formatAddress(from, fromName)}`,
     `To: ${to.join(", ")}`,
@@ -242,8 +276,50 @@ function buildRawMail({ from, fromName, to, cc, subject, html }) {
     "Content-Transfer-Encoding: base64"
   ];
 
-  const body = Buffer.from(html, "utf8").toString("base64").replace(/(.{76})/g, "$1\r\n");
+  const body = wrapBase64(Buffer.from(html, "utf8").toString("base64"));
   return base64UrlEncode(`${headers.join("\r\n")}\r\n\r\n${body}`);
+}
+
+function buildMultipartRawMail({ from, fromName, to, cc, subject, html, attachments }) {
+  const boundary = `mixed_${crypto.randomBytes(12).toString("hex")}`;
+  const headers = [
+    `From: ${formatAddress(from, fromName)}`,
+    `To: ${to.join(", ")}`,
+    ...(cc.length ? [`Cc: ${cc.join(", ")}`] : []),
+    `Subject: ${encodeMimeHeader(subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/mixed; boundary="${boundary}"`
+  ];
+
+  const parts = [
+    [
+      `--${boundary}`,
+      "Content-Type: text/html; charset=UTF-8",
+      "Content-Transfer-Encoding: base64",
+      "",
+      wrapBase64(Buffer.from(html, "utf8").toString("base64"))
+    ].join("\r\n")
+  ];
+
+  for (const attachment of attachments) {
+    const filename = attachment.filename || "attachment";
+    const contentType = attachment.contentType || "application/octet-stream";
+    parts.push([
+      `--${boundary}`,
+      `Content-Type: ${contentType}; name="${encodeMimeHeader(filename)}"`,
+      `Content-Disposition: attachment; filename="${encodeMimeHeader(filename)}"`,
+      "Content-Transfer-Encoding: base64",
+      "",
+      wrapBase64(Buffer.from(attachment.content).toString("base64"))
+    ].join("\r\n"));
+  }
+
+  parts.push(`--${boundary}--`);
+  return base64UrlEncode(`${headers.join("\r\n")}\r\n\r\n${parts.join("\r\n")}`);
+}
+
+function wrapBase64(value) {
+  return value.replace(/(.{76})/g, "$1\r\n");
 }
 
 function formatAddress(email, name) {

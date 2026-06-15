@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { config } from "./config.js";
-import { feishuApi, sendFeishuMail } from "./feishuClient.js";
+import { downloadFeishuMedia, feishuApi, sendFeishuMail } from "./feishuClient.js";
 
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
@@ -58,7 +58,12 @@ export function routeByAssemblyFactory(record) {
     return { ok: false, reason: `组装厂未配置主收件人：${assemblyFactories.join("、")}` };
   }
 
-  return { ok: true, assemblyFactory: assemblyFactories.join("、"), to: normalizedTo, cc: normalizedCc };
+  return {
+    ok: true,
+    assemblyFactory: assemblyFactories.join("、"),
+    to: normalizedTo,
+    cc: normalizedCc
+  };
 }
 
 export function buildMailHtml(record) {
@@ -115,6 +120,7 @@ export async function processBusinessRecord(record) {
   const version = valueToText(getField(record, "version")) || "";
   const subject = `米物BOM释放通知 - ${project}${version ? ` - ${version}` : ""}`;
   const html = buildMailHtml(record);
+  const attachmentRefs = collectAttachmentRefs(record);
 
   if (config.emailDryRun) {
     return {
@@ -123,15 +129,18 @@ export async function processBusinessRecord(record) {
       to: route.to,
       cc: route.cc,
       subject,
+      attachments: attachmentRefs.map(({ name, fileToken }) => ({ name, fileToken })),
       htmlPreview: html.slice(0, 300)
     };
   }
 
+  const attachments = await downloadMailAttachments(attachmentRefs);
   const result = await sendFeishuMail({
     to: route.to,
     cc: route.cc,
     subject,
-    html
+    html,
+    attachments
   });
 
   return {
@@ -139,6 +148,7 @@ export async function processBusinessRecord(record) {
     assemblyFactory: route.assemblyFactory,
     to: route.to,
     cc: route.cc,
+    attachments: attachments.map((item) => ({ filename: item.filename, bytes: item.content.length })),
     result
   };
 }
@@ -226,15 +236,6 @@ export function isDuplicateEvent(eventId) {
   return false;
 }
 
-function escapeHtml(value) {
-  return value
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#39;");
-}
-
 function buildSectionTable(title, rows) {
   const bodyRows = rows.map(([name, value]) => {
     return `<tr><td style="width:32%;font-weight:500;">${escapeHtml(name)}</td><td>${formatFieldHtml(value, name)}</td></tr>`;
@@ -256,6 +257,10 @@ function formatFieldHtml(value, fieldName = "") {
   if (typeof value === "number" && fieldName.includes("日期")) return formatDate(value);
   if (typeof value === "object") {
     const text = value.name || value.text || value.value || value.file_name || value.title || value.email || JSON.stringify(value);
+    const fileToken = value.file_token || value.fileToken || value.token;
+    if (fileToken) {
+      return `${escapeHtml(String(text || "附件"))}（已作为邮件附件发送）`;
+    }
     const href = value.url || value.link || value.tmp_url || value.download_url;
     if (href) {
       return `<a href="${escapeHtml(String(href))}">${escapeHtml(String(text || href))}</a>`;
@@ -263,6 +268,42 @@ function formatFieldHtml(value, fieldName = "") {
     return escapeHtml(String(text));
   }
   return escapeHtml(String(value));
+}
+
+function collectAttachmentRefs(record) {
+  const refs = [
+    ...extractAttachmentRefs(getField(record, "bomAttachments")),
+    ...extractAttachmentRefs(getField(record, "ecnAttachments"))
+  ];
+  const seen = new Set();
+  return refs.filter((ref) => {
+    if (!ref.fileToken || seen.has(ref.fileToken)) return false;
+    seen.add(ref.fileToken);
+    return true;
+  });
+}
+
+function extractAttachmentRefs(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.flatMap(extractAttachmentRefs);
+  if (typeof value === "object") {
+    const fileToken = value.file_token || value.fileToken || value.token;
+    if (!fileToken) return [];
+    return [{
+      fileToken,
+      name: value.name || value.file_name || value.filename || "attachment"
+    }];
+  }
+  return [];
+}
+
+async function downloadMailAttachments(attachmentRefs) {
+  const attachments = [];
+  for (const ref of attachmentRefs) {
+    const media = await downloadFeishuMedia(ref.fileToken, ref.name);
+    attachments.push(media);
+  }
+  return attachments;
 }
 
 function formatDate(timestamp) {
@@ -293,4 +334,13 @@ function valueToText(value) {
     return String(value.name || value.text || value.value || value.title || value.email || "");
   }
   return String(value);
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
 }
