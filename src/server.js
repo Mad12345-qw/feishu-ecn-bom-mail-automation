@@ -179,19 +179,19 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "POST" && url.pathname === "/webhook/feishu") {
-      return handleFeishuWebhook(req, res);
+      return await handleFeishuWebhook(req, res);
     }
 
     if (req.method === "POST" && url.pathname === "/demo/send") {
-      return handleDemoSend(req, res);
+      return await handleDemoSend(req, res);
     }
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/sync/bitable") {
-      return handleBitableSync(req, res, url);
+      return await handleBitableSync(req, res, url);
     }
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-test-mail") {
-      return handleTestMail(req, res, url);
+      return await handleTestMail(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname === "/oauth/feishu/start") {
@@ -199,7 +199,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/oauth/feishu/callback") {
-      return handleOAuthCallback(req, res, url);
+      return await handleOAuthCallback(req, res, url);
     }
 
     return sendJson(res, 404, { error: "not found" });
