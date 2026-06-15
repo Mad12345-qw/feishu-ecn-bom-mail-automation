@@ -9,6 +9,8 @@
 - 本地联调发送入口：`POST /demo/send`
 - ECN/BOM 邮件正文模板
 - 组装厂到收件邮箱的路由表
+- 固定收件人 + 发起人/项目经理 + 组装厂多选收件人的合并去重
+- 邮件发送后同步一条通知到指定飞书群
 - 安全试运行模式，只允许发送到指定测试邮箱
 - 发送事件日志：`logs/events.jsonl`
 
@@ -74,6 +76,8 @@ FEISHU_APP_ID
 FEISHU_APP_SECRET
 FEISHU_VERIFICATION_TOKEN
 FEISHU_SENDER_MAILBOX_ID
+FEISHU_SYNC_CHAT_ID
+FIXED_RECIPIENTS
 TEST_RECIPIENTS
 ```
 
@@ -82,3 +86,5 @@ TEST_RECIPIENTS
 ```text
 SAFE_TEST_MODE=true
 ```
+
+飞书群同步需要客户自建应用具备“发送消息”相关权限，并且应用机器人已加入目标群。固定收件人用英文逗号配置在 `FIXED_RECIPIENTS`，发起人和项目经理邮箱从多维表字段中自动提取。

@@ -179,6 +179,8 @@ const server = http.createServer(async (req, res) => {
         safeTestMode: config.safeTestMode,
         emailDryRun: config.emailDryRun,
         bitableConfigured: Boolean(config.bitable.appToken && config.bitable.tableId),
+        fixedRecipientCount: config.fixedRecipients.length,
+        feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
         userMailAuth: getUserAuthStatus()
       });
     }

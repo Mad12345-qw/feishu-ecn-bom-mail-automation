@@ -26,6 +26,10 @@ services:
         value: BOM释放通知
       - key: FEISHU_USER_TOKEN_B64
         sync: false
+      - key: FEISHU_SYNC_CHAT_ID
+        sync: false
+      - key: FIXED_RECIPIENTS
+        sync: false
       - key: TEST_RECIPIENTS
         sync: false
       - key: BITABLE_APP_TOKEN

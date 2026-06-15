@@ -27,6 +27,13 @@ function readJson(relativePath, fallback) {
   return JSON.parse(fs.readFileSync(fullPath, "utf8"));
 }
 
+function parseCsvList(value) {
+  return String(value || "")
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
 loadDotEnv();
 
 export const config = {
@@ -37,7 +44,8 @@ export const config = {
     appSecret: process.env.FEISHU_APP_SECRET || "",
     verificationToken: process.env.FEISHU_VERIFICATION_TOKEN || "",
     senderMailboxId: process.env.FEISHU_SENDER_MAILBOX_ID || "",
-    senderDisplayName: process.env.FEISHU_SENDER_DISPLAY_NAME || "BOM释放通知"
+    senderDisplayName: process.env.FEISHU_SENDER_DISPLAY_NAME || "BOM释放通知",
+    syncChatId: process.env.FEISHU_SYNC_CHAT_ID || ""
   },
   bitable: {
     appToken: process.env.BITABLE_APP_TOKEN || "",
@@ -45,10 +53,8 @@ export const config = {
   },
   safeTestMode: String(process.env.SAFE_TEST_MODE || "true").toLowerCase() !== "false",
   emailDryRun: String(process.env.EMAIL_DRY_RUN || "true").toLowerCase() !== "false",
-  testRecipients: (process.env.TEST_RECIPIENTS || "")
-    .split(",")
-    .map((item) => item.trim().toLowerCase())
-    .filter(Boolean),
+  fixedRecipients: parseCsvList(process.env.FIXED_RECIPIENTS),
+  testRecipients: parseCsvList(process.env.TEST_RECIPIENTS),
   assemblyFactories: readJson("config/assembly-factories.json", {}),
   fieldMapping: readJson("config/field-mapping.json", {})
 };

@@ -3,6 +3,8 @@
   "version": ["版本号", "版本号："],
   "brand": ["项目品牌"],
   "phase": ["项目阶段"],
+  "initiator": ["发起人", "发起人邮箱", "发起人邮件"],
+  "projectManager": ["对应项目经理", "项目经理", "项目经理邮箱", "PM邮箱"],
   "assemblyFactory": ["组装工厂（可多选）", "组装工厂"],
   "bomType": ["BOM类型"],
   "changeLog": ["变更记录"],

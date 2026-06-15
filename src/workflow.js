@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { config } from "./config.js";
-import { downloadFeishuMedia, feishuApi, sendFeishuMail } from "./feishuClient.js";
+import { downloadFeishuMedia, feishuApi, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
 
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
@@ -66,6 +66,33 @@ export function routeByAssemblyFactory(record) {
   };
 }
 
+export function buildRecipientRoute(record) {
+  const factoryRoute = routeByAssemblyFactory(record);
+  if (!factoryRoute.ok) return factoryRoute;
+
+  const dynamicRecipients = normalizeEmailList([
+    ...extractEmails(getField(record, "initiator")),
+    ...extractEmails(getField(record, "projectManager"))
+  ]);
+  const fixedRecipients = normalizeEmailList(config.fixedRecipients);
+  const factoryRecipients = normalizeEmailList(factoryRoute.to);
+  const cc = normalizeEmailList(factoryRoute.cc);
+  const to = normalizeEmailList([...fixedRecipients, ...dynamicRecipients, ...factoryRecipients]);
+
+  if (!to.length) {
+    return { ok: false, reason: "未配置任何收件人" };
+  }
+
+  return {
+    ...factoryRoute,
+    to,
+    cc,
+    fixedRecipients,
+    dynamicRecipients,
+    factoryRecipients
+  };
+}
+
 export function buildMailHtml(record) {
   const bomRows = [
     ["项目名称及项目编号", getField(record, "projectNameOrCode")],
@@ -115,7 +142,7 @@ export async function processBusinessRecord(record) {
     return { status: "received_no_business_fields", reason: "事件已接收，但暂未解析到业务字段" };
   }
 
-  const route = routeByAssemblyFactory(record);
+  const route = buildRecipientRoute(record);
   if (!route.ok) {
     return { status: "blocked", reason: route.reason };
   }
@@ -134,6 +161,10 @@ export async function processBusinessRecord(record) {
       assemblyFactory: route.assemblyFactory,
       to: route.to,
       cc: route.cc,
+      fixedRecipients: route.fixedRecipients,
+      dynamicRecipients: route.dynamicRecipients,
+      factoryRecipients: route.factoryRecipients,
+      feishuGroupSync: config.feishu.syncChatId ? "planned" : "not_configured",
       subject,
       attachments: attachmentRefs.map(({ name, fileToken }) => ({ name, fileToken })),
       htmlPreview: html.slice(0, 300)
@@ -148,14 +179,19 @@ export async function processBusinessRecord(record) {
     html,
     attachments
   });
+  const groupSync = await syncMailToFeishuGroup({ record, route, subject, attachments });
 
   return {
     status: "sent",
     assemblyFactory: route.assemblyFactory,
     to: route.to,
     cc: route.cc,
+    fixedRecipients: route.fixedRecipients,
+    dynamicRecipients: route.dynamicRecipients,
+    factoryRecipients: route.factoryRecipients,
     attachments: attachments.map((item) => ({ filename: item.filename, bytes: item.content.length })),
-    result
+    result,
+    groupSync
   };
 }
 
@@ -323,6 +359,59 @@ async function downloadMailAttachments(attachmentRefs) {
   return attachments;
 }
 
+async function syncMailToFeishuGroup({ record, route, subject, attachments }) {
+  if (!config.feishu.syncChatId) {
+    return { status: "skipped", reason: "FEISHU_SYNC_CHAT_ID not configured" };
+  }
+
+  try {
+    const result = await sendFeishuChatText({
+      chatId: config.feishu.syncChatId,
+      text: buildGroupSyncText({ record, route, subject, attachments })
+    });
+    return { status: "sent", result };
+  } catch (error) {
+    return { status: "failed", error: error.message };
+  }
+}
+
+function buildGroupSyncText({ record, route, subject, attachments }) {
+  const lines = [
+    "BOM/ECN邮件同步",
+    `主题：${subject}`,
+    "",
+    "邮件内容摘要："
+  ];
+
+  const detailRows = [
+    ["项目名称及项目编号", valueToText(getField(record, "projectNameOrCode"))],
+    ["版本号", valueToText(getField(record, "version"))],
+    ["项目品牌", valueToText(getField(record, "brand"))],
+    ["项目阶段", valueToText(getField(record, "phase"))],
+    ["组装工厂", route.assemblyFactory || valueToText(getField(record, "assemblyFactory"))],
+    ["BOM类型", valueToText(getField(record, "bomType"))],
+    ["变更记录", valueToText(getField(record, "changeLog"))],
+    ["ECN编号", valueToText(getField(record, "ecnNumber"))],
+    ["变更原因", valueToText(getField(record, "changeReason"))],
+    ["变更前", valueToText(getField(record, "changeBefore"))],
+    ["变更后", valueToText(getField(record, "changeAfter"))],
+    ["执行方式", valueToText(getField(record, "executionMode"))]
+  ];
+  for (const [name, value] of detailRows) {
+    if (value) lines.push(`${name}：${value}`);
+  }
+
+  lines.push("", `收件人：${route.to.join(", ")}`);
+  if (route.cc.length) lines.push(`抄送：${route.cc.join(", ")}`);
+  if (route.fixedRecipients.length) lines.push(`固定收件人：${route.fixedRecipients.join(", ")}`);
+  if (route.dynamicRecipients.length) lines.push(`发起人/项目经理：${route.dynamicRecipients.join(", ")}`);
+  if (route.factoryRecipients.length) lines.push(`组装厂收件人：${route.factoryRecipients.join(", ")}`);
+  if (attachments.length) {
+    lines.push(`附件：${attachments.map((item) => item.filename).join("、")}`);
+  }
+  return lines.join("\n");
+}
+
 function formatDate(timestamp) {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return escapeHtml(String(timestamp));
@@ -351,6 +440,15 @@ function valueToText(value) {
     return String(value.name || value.text || value.value || value.title || value.email || "");
   }
   return String(value);
+}
+
+function extractEmails(value) {
+  if (value === undefined || value === null || value === "") return [];
+  if (Array.isArray(value)) return value.flatMap(extractEmails);
+  if (typeof value === "object") {
+    return Object.values(value).flatMap(extractEmails);
+  }
+  return String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
 }
 
 function escapeHtml(value) {

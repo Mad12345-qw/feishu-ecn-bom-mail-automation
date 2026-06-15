@@ -213,6 +213,21 @@ export async function sendFeishuMail({ to, cc = [], subject, html, attachments =
   });
 }
 
+export async function sendFeishuChatText({ chatId, text }) {
+  if (!chatId) {
+    throw new Error("Missing FEISHU_SYNC_CHAT_ID");
+  }
+
+  return feishuApi("/im/v1/messages?receive_id_type=chat_id", {
+    method: "POST",
+    body: JSON.stringify({
+      receive_id: chatId,
+      msg_type: "text",
+      content: JSON.stringify({ text })
+    })
+  });
+}
+
 function saveUserToken(data) {
   const now = Date.now();
   const token = {
