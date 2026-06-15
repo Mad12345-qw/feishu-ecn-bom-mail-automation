@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
-import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
+import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
 import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
@@ -105,6 +105,19 @@ async function handleTestMail(req, res, url) {
   return sendJson(res, 200, { status: "sent", to: config.testRecipients, result });
 }
 
+function handleUserTokenEnvExport(req, res, url) {
+  if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
+
+  const result = exportUserTokenForRenderEnv();
+  appendLog({
+    type: "oauth_token_env_export",
+    ok: result.ok,
+    authorized: result.status?.authorized || false,
+    hasRefreshToken: result.status?.hasRefreshToken || false
+  });
+  return sendJson(res, result.ok ? 200 : 400, result);
+}
+
 function assertDebugToken(req, url) {
   const token = url.searchParams.get("token") || req.headers["x-debug-token"];
   if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
@@ -192,6 +205,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-test-mail") {
       return await handleTestMail(req, res, url);
+    }
+
+    if (req.method === "GET" && url.pathname === "/debug/user-token-env") {
+      return handleUserTokenEnvExport(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname === "/oauth/feishu/start") {

@@ -6,6 +6,7 @@ import path from "node:path";
 const FEISHU_BASE_URL = "https://open.feishu.cn/open-apis";
 const FEISHU_AUTH_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize";
 const USER_TOKEN_PATH = path.join(config.rootDir, "data", "feishu-user-token.json");
+const USER_TOKEN_ENV_KEY = "FEISHU_USER_TOKEN_B64";
 
 let cachedTenantToken = null;
 let cachedTenantTokenExpiresAt = 0;
@@ -65,6 +66,7 @@ export function buildFeishuOAuthUrl({ redirectUri, state }) {
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("state", state);
   url.searchParams.set("scope", [
+    "offline_access",
     "mail:user_mailbox:readonly",
     "mail:user_mailbox.message:send",
     "mail:user_mailbox.message:readonly"
@@ -127,8 +129,26 @@ export function getUserAuthStatus() {
   const stored = readUserToken();
   return {
     authorized: Boolean(stored?.access_token || stored?.refresh_token),
+    hasRefreshToken: Boolean(stored?.refresh_token),
     accessTokenValid: Boolean(stored?.access_token && stored.access_token_expires_at > Date.now() + 60_000),
     refreshTokenValid: Boolean(stored?.refresh_token && stored.refresh_token_expires_at > Date.now() + 60_000)
+  };
+}
+
+export function exportUserTokenForRenderEnv() {
+  const stored = readUserToken();
+  if (!stored?.access_token && !stored?.refresh_token) {
+    return {
+      ok: false,
+      reason: "Missing Feishu user authorization. Open /oauth/feishu/start first."
+    };
+  }
+
+  return {
+    ok: true,
+    envKey: USER_TOKEN_ENV_KEY,
+    envValue: Buffer.from(JSON.stringify(stored), "utf8").toString("base64url"),
+    status: getUserAuthStatus()
   };
 }
 
@@ -179,12 +199,36 @@ function saveUserToken(data) {
 }
 
 function readUserToken() {
-  if (!fs.existsSync(USER_TOKEN_PATH)) return null;
-  try {
-    return JSON.parse(fs.readFileSync(USER_TOKEN_PATH, "utf8"));
-  } catch {
-    return null;
+  if (fs.existsSync(USER_TOKEN_PATH)) {
+    try {
+      return JSON.parse(fs.readFileSync(USER_TOKEN_PATH, "utf8"));
+    } catch {
+      return readUserTokenFromEnv();
+    }
   }
+  return readUserTokenFromEnv();
+}
+
+function readUserTokenFromEnv() {
+  const encoded = process.env[USER_TOKEN_ENV_KEY];
+  if (encoded) {
+    try {
+      return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+    } catch {
+      return null;
+    }
+  }
+
+  const rawJson = process.env.FEISHU_USER_TOKEN_JSON;
+  if (rawJson) {
+    try {
+      return JSON.parse(rawJson);
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
 }
 
 function buildRawMail({ from, fromName, to, cc, subject, html }) {
