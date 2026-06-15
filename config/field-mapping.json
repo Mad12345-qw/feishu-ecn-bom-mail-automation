@@ -11,8 +11,11 @@
   "changeDepartment": ["发起人部门", "变更部门"],
   "ecnNumber": ["ECN编号"],
   "ecnAttachments": ["ECN附件上传", "ECN附件", "ECN变更通知书附件"],
-  "executionMode": ["执行方式"],
   "changeReason": ["变更原因"],
   "changeImplementationDate": ["变更实施日期"],
-  "changeImplementationDateOrBatch": ["变更实施日期或批次"]
+  "changeBefore": ["变更前"],
+  "changeBeforeSupplement": ["变更前补充描述"],
+  "changeAfter": ["变更后"],
+  "changeAfterSupplement": ["变更后补充描述"],
+  "executionMode": ["执行方式"]
 }

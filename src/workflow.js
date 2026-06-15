@@ -82,10 +82,15 @@ export function buildMailHtml(record) {
     ["变更部门", getField(record, "changeDepartment")],
     ["ECN编号", getField(record, "ecnNumber")],
     ["ECN附件", getField(record, "ecnAttachments")],
-    ["执行方式", getField(record, "executionMode")],
     ["变更原因", getField(record, "changeReason")],
-    ["变更实施日期", getField(record, "changeImplementationDate")],
-    ["变更实施日期或批次", getField(record, "changeImplementationDateOrBatch")]
+    ["变更实施日期", getField(record, "changeImplementationDate")]
+  ];
+  const changeDescriptionColumns = [
+    ["变更前", getField(record, "changeBefore")],
+    ["变更前补充描述", getField(record, "changeBeforeSupplement")],
+    ["变更后", getField(record, "changeAfter")],
+    ["变更后补充描述", getField(record, "changeAfterSupplement")],
+    ["执行方式", getField(record, "executionMode")]
   ];
 
   return `<!doctype html>
@@ -97,6 +102,7 @@ export function buildMailHtml(record) {
 
     ${buildSectionTable("BOM释放详情", bomRows)}
     ${buildSectionTable("关联ECN变更通知单详情", ecnRows)}
+    ${buildChangeDescriptionTable(changeDescriptionColumns)}
 
     <p style="color:#666;font-size:12px;margin-top:16px;">该邮件由系统自动发送，附件或链接仅供下载查看，不会开放飞书源文件编辑权限。</p>
   </div>
@@ -246,6 +252,17 @@ function buildSectionTable(title, rows) {
     <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;">
       <thead><tr><th align="left" style="width:32%;">名称</th><th align="left">内容</th></tr></thead>
       <tbody>${bodyRows}</tbody>
+    </table>`;
+}
+
+function buildChangeDescriptionTable(columns) {
+  const headers = columns.map(([name]) => `<th align="left">${escapeHtml(name)}</th>`).join("");
+  const values = columns.map(([name, value]) => `<td>${formatFieldHtml(value, name)}</td>`).join("");
+  return `
+    <h3 style="margin:20px 0 8px 0;font-size:16px;">变更描述</h3>
+    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;">
+      <thead><tr>${headers}</tr></thead>
+      <tbody><tr>${values}</tr></tbody>
     </table>`;
 }
 
