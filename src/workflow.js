@@ -6,8 +6,13 @@ const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
 
 function getField(source, key) {
-  const fieldName = config.fieldMapping[key] || key;
-  return source[fieldName] ?? source[key] ?? "";
+  const configured = config.fieldMapping[key] || key;
+  const fieldNames = Array.isArray(configured) ? configured : [configured];
+  for (const fieldName of [...fieldNames, key]) {
+    const value = source[fieldName];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
 }
 
 function normalizeEmailList(items) {
@@ -25,27 +30,39 @@ function assertAllowedRecipients(to, cc) {
 }
 
 export function routeByAssemblyFactory(record) {
-  const assemblyFactory = String(getField(record, "assemblyFactory")).trim();
-  if (!assemblyFactory) {
+  const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
+  if (!assemblyFactories.length) {
     return { ok: false, reason: "缺少组装工厂字段" };
   }
 
-  const route = config.assemblyFactories[assemblyFactory];
-  if (!route || route.enabled === false) {
-    return { ok: false, reason: `未配置组装厂收件地址：${assemblyFactory}` };
+  const missing = [];
+  const to = [];
+  const cc = [];
+  for (const assemblyFactory of assemblyFactories) {
+    const route = config.assemblyFactories[assemblyFactory];
+    if (!route || route.enabled === false) {
+      missing.push(assemblyFactory);
+      continue;
+    }
+    to.push(...(route.to || []));
+    cc.push(...(route.cc || []));
   }
 
-  const to = normalizeEmailList(route.to || []);
-  const cc = normalizeEmailList(route.cc || []);
-  if (!to.length) {
-    return { ok: false, reason: `组装厂未配置主收件人：${assemblyFactory}` };
+  if (missing.length) {
+    return { ok: false, reason: `未配置组装厂收件地址：${missing.join("、")}` };
   }
 
-  return { ok: true, assemblyFactory, to, cc };
+  const normalizedTo = normalizeEmailList(to);
+  const normalizedCc = normalizeEmailList(cc);
+  if (!normalizedTo.length) {
+    return { ok: false, reason: `组装厂未配置主收件人：${assemblyFactories.join("、")}` };
+  }
+
+  return { ok: true, assemblyFactory: assemblyFactories.join("、"), to: normalizedTo, cc: normalizedCc };
 }
 
 export function buildMailHtml(record) {
-  const rows = [
+  const bomRows = [
     ["项目名称及项目编号", getField(record, "projectNameOrCode")],
     ["版本号", getField(record, "version")],
     ["项目品牌", getField(record, "brand")],
@@ -53,24 +70,31 @@ export function buildMailHtml(record) {
     ["组装工厂", getField(record, "assemblyFactory")],
     ["BOM类型", getField(record, "bomType")],
     ["变更记录", getField(record, "changeLog")],
-    ["BOM释放附件下载链接", getField(record, "bomAttachments")],
-    ["上一个版本BOM释放记录", getField(record, "previousBomRecord")],
-    ["ECN变更通知书附件", getField(record, "ecnAttachments")]
+    ["BOM释放附件", getField(record, "bomAttachments")],
+    ["上一个版本BOM释放附件", getField(record, "previousBomAttachment")]
   ];
-
-  const bodyRows = rows.map(([name, value]) => {
-    return `<tr><td>${escapeHtml(name)}</td><td>${escapeHtml(String(value || ""))}</td></tr>`;
-  }).join("");
+  const ecnRows = [
+    ["变更部门", getField(record, "changeDepartment")],
+    ["ECN编号", getField(record, "ecnNumber")],
+    ["ECN附件", getField(record, "ecnAttachments")],
+    ["执行方式", getField(record, "executionMode")],
+    ["变更原因", getField(record, "changeReason")],
+    ["变更实施日期", getField(record, "changeImplementationDate")],
+    ["变更实施日期或批次", getField(record, "changeImplementationDateOrBatch")]
+  ];
 
   return `<!doctype html>
 <html>
 <body>
-  <p>您好，以下为本次 BOM 释放 / ECN 变更通知信息，请查收。</p>
-  <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;">
-    <thead><tr><th align="left">名称</th><th align="left">内容</th></tr></thead>
-    <tbody>${bodyRows}</tbody>
-  </table>
-  <p style="color:#666;font-size:12px;">该邮件由系统自动发送，附件或链接仅供下载查看，不会开放飞书源文件编辑权限。</p>
+  <div style="font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;line-height:1.7;color:#1f2329;">
+    <h2 style="margin:0 0 12px 0;font-size:20px;">米物BOM释放通知</h2>
+    <p style="margin:0 0 20px 0;">收到信息请内部传达导入，并提供对应的生产导入执行佐证给到米物对接人员（不限于转化后的生产BOM等资料），如有疑问，请联系我司对应研发窗口。</p>
+
+    ${buildSectionTable("BOM释放详情", bomRows)}
+    ${buildSectionTable("关联ECN变更通知单详情", ecnRows)}
+
+    <p style="color:#666;font-size:12px;margin-top:16px;">该邮件由系统自动发送，附件或链接仅供下载查看，不会开放飞书源文件编辑权限。</p>
+  </div>
 </body>
 </html>`;
 }
@@ -87,9 +111,9 @@ export async function processBusinessRecord(record) {
 
   assertAllowedRecipients(route.to, route.cc);
 
-  const project = getField(record, "projectNameOrCode") || "未命名项目";
-  const version = getField(record, "version") || "";
-  const subject = `BOM释放通知 - ${project}${version ? ` - ${version}` : ""}`;
+  const project = valueToText(getField(record, "projectNameOrCode")) || "未命名项目";
+  const version = valueToText(getField(record, "version")) || "";
+  const subject = `米物BOM释放通知 - ${project}${version ? ` - ${version}` : ""}`;
   const html = buildMailHtml(record);
 
   if (config.emailDryRun) {
@@ -209,4 +233,50 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#39;");
+}
+
+function buildSectionTable(title, rows) {
+  const bodyRows = rows.map(([name, value]) => {
+    return `<tr><td style="width:32%;font-weight:500;">${escapeHtml(name)}</td><td>${formatFieldHtml(value)}</td></tr>`;
+  }).join("");
+
+  return `
+    <h3 style="margin:20px 0 8px 0;font-size:16px;">${escapeHtml(title)}</h3>
+    <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;">
+      <thead><tr><th align="left" style="width:32%;">名称</th><th align="left">内容</th></tr></thead>
+      <tbody>${bodyRows}</tbody>
+    </table>`;
+}
+
+function formatFieldHtml(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (Array.isArray(value)) {
+    return value.map(formatFieldHtml).filter(Boolean).join("<br>");
+  }
+  if (typeof value === "object") {
+    const text = value.name || value.text || value.value || value.file_name || value.title || value.email || JSON.stringify(value);
+    const href = value.url || value.link || value.tmp_url || value.download_url;
+    if (href) {
+      return `<a href="${escapeHtml(String(href))}">${escapeHtml(String(text || href))}</a>`;
+    }
+    return escapeHtml(String(text));
+  }
+  return escapeHtml(String(value));
+}
+
+function normalizeFactoryNames(value) {
+  const text = valueToText(value);
+  return [...new Set(text
+    .split(/[、,，;；\n\r]/)
+    .map((item) => item.trim())
+    .filter(Boolean))];
+}
+
+function valueToText(value) {
+  if (value === undefined || value === null) return "";
+  if (Array.isArray(value)) return value.map(valueToText).filter(Boolean).join("、");
+  if (typeof value === "object") {
+    return String(value.name || value.text || value.value || value.title || value.email || "");
+  }
+  return String(value);
 }
