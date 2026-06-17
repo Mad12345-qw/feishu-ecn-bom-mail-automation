@@ -36,3 +36,7 @@ services:
         sync: false
       - key: BITABLE_TABLE_ID
         sync: false
+      - key: BITABLE_SOURCES
+        sync: false
+      - key: BITABLE_SKIP_EXISTING_ON_START
+        value: "false"

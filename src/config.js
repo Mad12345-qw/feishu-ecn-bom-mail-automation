@@ -34,6 +34,32 @@ function parseCsvList(value) {
     .filter(Boolean);
 }
 
+function parseBoolean(value, fallback) {
+  if (value === undefined || value === null || value === "") return fallback;
+  return String(value).toLowerCase() !== "false";
+}
+
+function parseBitableSources() {
+  const rawSources = String(process.env.BITABLE_SOURCES || "").trim();
+  if (rawSources) {
+    return rawSources
+      .split(";")
+      .map((item, index) => {
+        const [appToken, tableId, name] = item.split("|").map((part) => part.trim());
+        return {
+          appToken,
+          tableId,
+          name: name || `source-${index + 1}`
+        };
+      })
+      .filter((item) => item.appToken && item.tableId);
+  }
+
+  const appToken = process.env.BITABLE_APP_TOKEN || "";
+  const tableId = process.env.BITABLE_TABLE_ID || "";
+  return appToken && tableId ? [{ appToken, tableId, name: "default" }] : [];
+}
+
 loadDotEnv();
 
 export const config = {
@@ -49,10 +75,12 @@ export const config = {
   },
   bitable: {
     appToken: process.env.BITABLE_APP_TOKEN || "",
-    tableId: process.env.BITABLE_TABLE_ID || ""
+    tableId: process.env.BITABLE_TABLE_ID || "",
+    sources: parseBitableSources(),
+    skipExistingOnStart: parseBoolean(process.env.BITABLE_SKIP_EXISTING_ON_START, false)
   },
-  safeTestMode: String(process.env.SAFE_TEST_MODE || "true").toLowerCase() !== "false",
-  emailDryRun: String(process.env.EMAIL_DRY_RUN || "true").toLowerCase() !== "false",
+  safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
+  emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),
   fixedRecipients: parseCsvList(process.env.FIXED_RECIPIENTS),
   testRecipients: parseCsvList(process.env.TEST_RECIPIENTS),
   assemblyFactories: readJson("config/assembly-factories.json", {}),

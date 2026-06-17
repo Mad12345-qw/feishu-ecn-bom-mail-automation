@@ -195,28 +195,63 @@ export async function processBusinessRecord(record) {
   };
 }
 
-export function createRecordFingerprint(recordId, fields) {
+export function createRecordFingerprint(sourceId, recordId, fields) {
   return crypto
     .createHash("sha256")
-    .update(`${recordId}:${JSON.stringify(fields || {})}`)
+    .update(`${sourceId}:${recordId}:${JSON.stringify(fields || {})}`)
     .digest("hex");
 }
 
 export async function syncConfiguredBitableRecords() {
-  if (!config.bitable.appToken || !config.bitable.tableId) {
+  if (!config.bitable.sources.length) {
     return {
       status: "blocked",
-      reason: "Missing BITABLE_APP_TOKEN or BITABLE_TABLE_ID"
+      reason: "Missing BITABLE_SOURCES or BITABLE_APP_TOKEN/BITABLE_TABLE_ID"
     };
   }
 
+  const sources = [];
+  const results = [];
+  for (const source of config.bitable.sources) {
+    let sourceResult;
+    try {
+      sourceResult = await syncBitableSource(source);
+    } catch (error) {
+      sourceResult = {
+        source: describeBitableSource(source),
+        total: 0,
+        processed: 0,
+        error: error.message,
+        results: []
+      };
+    }
+    sources.push(sourceResult);
+    for (const item of sourceResult.results) {
+      results.push({
+        source: sourceResult.source,
+        ...item
+      });
+    }
+  }
+
+  return {
+    status: sources.some((source) => source.error) ? "partial" : "synced",
+    sourceCount: sources.length,
+    total: sources.reduce((sum, source) => sum + source.total, 0),
+    processed: results.filter((item) => item.result).length,
+    sources,
+    results
+  };
+}
+
+async function syncBitableSource(source) {
+  const sourceId = getBitableSourceId(source);
   const data = await feishuApi(
-    `/bitable/v1/apps/${encodeURIComponent(config.bitable.appToken)}/tables/${encodeURIComponent(config.bitable.tableId)}/records?page_size=100`
+    `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records?page_size=100`
   );
 
   const items = data.data?.items || [];
   const results = [];
-
   for (const item of items) {
     const fields = item.fields || {};
     const recordId = item.record_id || item.id || "";
@@ -226,23 +261,53 @@ export async function syncConfiguredBitableRecords() {
       continue;
     }
 
-    const fingerprint = createRecordFingerprint(recordId, fields);
+    const fingerprint = createRecordFingerprint(sourceId, recordId, fields);
     if (processedRecordFingerprints.has(fingerprint)) {
       results.push({ recordId, status: "skipped_duplicate" });
       continue;
     }
 
     processedRecordFingerprints.add(fingerprint);
-    const result = await processBusinessRecord(fields);
-    results.push({ recordId, result });
+    if (config.bitable.skipExistingOnStart && !bootstrappedBitableSources.has(sourceId)) {
+      results.push({ recordId, status: "skipped_baseline" });
+      continue;
+    }
+
+    try {
+      const result = await processBusinessRecord(fields);
+      results.push({ recordId, result });
+    } catch (error) {
+      results.push({ recordId, status: "failed", error: error.message });
+    }
   }
 
+  bootstrappedBitableSources.add(sourceId);
   return {
-    status: "synced",
+    source: describeBitableSource(source),
     total: items.length,
     processed: results.filter((item) => item.result).length,
     results
   };
+}
+
+const bootstrappedBitableSources = new Set();
+
+function getBitableSourceId(source) {
+  return `${source.appToken}:${source.tableId}`;
+}
+
+function describeBitableSource(source) {
+  return {
+    name: source.name,
+    appToken: maskToken(source.appToken),
+    tableId: source.tableId
+  };
+}
+
+function maskToken(value) {
+  const text = String(value || "");
+  if (text.length <= 10) return text ? "***" : "";
+  return `${text.slice(0, 6)}...${text.slice(-4)}`;
 }
 
 export function mapFeishuEventToRecord(eventBody) {

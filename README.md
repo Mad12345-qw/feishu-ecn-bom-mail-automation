@@ -11,6 +11,7 @@
 - 组装厂到收件邮箱的路由表
 - 固定收件人 + 发起人/项目经理 + 组装厂多选收件人的合并去重
 - 邮件发送后同步一条通知到指定飞书群
+- 支持配置多张飞书多维表格作为同步来源
 - 安全试运行模式，只允许发送到指定测试邮箱
 - 发送事件日志：`logs/events.jsonl`
 
@@ -79,7 +80,22 @@ FEISHU_SENDER_MAILBOX_ID
 FEISHU_SYNC_CHAT_ID
 FIXED_RECIPIENTS
 TEST_RECIPIENTS
+BITABLE_SOURCES
 ```
+
+如果客户有多张正式表，优先使用 `BITABLE_SOURCES`，格式为：
+
+```text
+app_token|table_id|表名;app_token|table_id|表名
+```
+
+切换正式表时建议先设置：
+
+```text
+BITABLE_SKIP_EXISTING_ON_START=true
+```
+
+这样服务重启后的第一轮同步只建立历史数据基线，不会把正式表里的存量记录批量发出。客户后续新增或修改记录时再触发邮件。
 
 试运行阶段保持：
 
