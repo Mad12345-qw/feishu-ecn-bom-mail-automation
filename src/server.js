@@ -197,7 +197,8 @@ const server = http.createServer(async (req, res) => {
         bitableLookupSourceNames: config.bitable.lookupSourceNames,
         fieldMapping: {
           assemblyFactory: config.fieldMapping.assemblyFactory,
-          bomAttachments: config.fieldMapping.bomAttachments
+          bomAttachments: config.fieldMapping.bomAttachments,
+          changeDescription: config.fieldMapping.changeDescription
         },
         fixedRecipientCount: config.fixedRecipients.length,
         includeFactoryRecipients: config.includeFactoryRecipients,

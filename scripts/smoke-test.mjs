@@ -17,7 +17,8 @@ const sampleRecord = {
       "name": "PB2033_电子BOM_V10_20260609_BSMI.xlsx"
     }
   ],
-  "ECN变更通知书附件": "ECO-PROJ-D-18-V1.7 量产产品设计变更通知书.xlsx"
+  "ECN变更通知书附件": "ECO-PROJ-D-18-V1.7 量产产品设计变更通知书.xlsx",
+  "变更描述": "变更前:C415,C419原来只有1个替代料 | 变更后:C415,C419增加多1个替代料 | 执行方式:立即变更"
 };
 
 const route = routeByAssemblyFactory(sampleRecord);
@@ -34,6 +35,10 @@ assert.equal(attachmentRefs[0].fileToken, "mock_bom_file_token");
 assert.equal(ecnOnlyRoute.ok, false);
 assert.equal(mixedRoute.ok, true);
 assert.equal(mixedRoute.assemblyFactory, "奥海");
+assert.equal(html.includes("组装厂"), true);
+assert.equal(html.includes("C415,C419原来只有1个替代料"), true);
+assert.equal(html.includes("C415,C419增加多1个替代料"), true);
+assert.equal(html.includes("立即变更"), true);
 
 console.log(JSON.stringify({
   route,

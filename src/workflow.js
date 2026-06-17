@@ -33,7 +33,7 @@ function assertAllowedRecipients(to, cc) {
 export function routeByAssemblyFactory(record) {
   const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
   if (!assemblyFactories.length) {
-    return { ok: false, reason: "缺少组装工厂字段" };
+    return { ok: false, reason: "缺少组装厂字段" };
   }
 
   const missing = [];
@@ -96,12 +96,13 @@ export function buildRecipientRoute(record) {
 }
 
 export function buildMailHtml(record) {
+  const changeDescription = getChangeDescriptionParts(record);
   const bomRows = [
     ["项目名称及项目编号", getField(record, "projectNameOrCode")],
     ["版本号", getField(record, "version")],
     ["项目品牌", getField(record, "brand")],
     ["项目阶段", getField(record, "phase")],
-    ["组装工厂", getField(record, "assemblyFactory")],
+    ["组装厂", getField(record, "assemblyFactory")],
     ["BOM类型", getField(record, "bomType")],
     ["变更记录", getField(record, "changeLog")],
     ["BOM释放附件", getField(record, "bomAttachments")],
@@ -115,11 +116,11 @@ export function buildMailHtml(record) {
     ["变更实施日期", getField(record, "changeImplementationDate")]
   ];
   const changeDescriptionColumns = [
-    ["变更前", getField(record, "changeBefore")],
-    ["变更前补充描述", getField(record, "changeBeforeSupplement")],
-    ["变更后", getField(record, "changeAfter")],
-    ["变更后补充描述", getField(record, "changeAfterSupplement")],
-    ["执行方式", getField(record, "executionMode")]
+    ["变更前", changeDescription.before],
+    ["变更前补充描述", changeDescription.beforeSupplement],
+    ["变更后", changeDescription.after],
+    ["变更后补充描述", changeDescription.afterSupplement],
+    ["执行方式", changeDescription.executionMode]
   ];
 
   return `<!doctype html>
@@ -573,6 +574,63 @@ export function isDuplicateEvent(eventId) {
   return false;
 }
 
+function getChangeDescriptionParts(record) {
+  const explicit = {
+    before: getField(record, "changeBefore"),
+    beforeSupplement: getField(record, "changeBeforeSupplement"),
+    after: getField(record, "changeAfter"),
+    afterSupplement: getField(record, "changeAfterSupplement"),
+    executionMode: getField(record, "executionMode")
+  };
+  const rawText = valueToText(getField(record, "changeDescription")).trim();
+  if (!rawText) return explicit;
+
+  const parsed = parseLabeledChangeDescription(rawText);
+  return {
+    before: explicit.before || parsed.before || (parsed.hasAny ? "" : rawText),
+    beforeSupplement: explicit.beforeSupplement || parsed.beforeSupplement || "",
+    after: explicit.after || parsed.after || "",
+    afterSupplement: explicit.afterSupplement || parsed.afterSupplement || "",
+    executionMode: explicit.executionMode || parsed.executionMode || ""
+  };
+}
+
+function parseLabeledChangeDescription(text) {
+  const labels = [
+    ["beforeSupplement", "变更前补充描述"],
+    ["beforeSupplement", "变更前描述补充"],
+    ["afterSupplement", "变更后补充描述"],
+    ["afterSupplement", "变更后描述补充"],
+    ["executionMode", "执行方式"],
+    ["before", "变更前"],
+    ["after", "变更后"]
+  ];
+  const labelLookup = new Map(labels.map(([key, label]) => [label, key]));
+  const pattern = new RegExp(`(${labels.map(([, label]) => escapeRegExp(label)).join("|")})\\s*[:：]`, "g");
+  const matches = [...text.matchAll(pattern)];
+  const result = { hasAny: false };
+  if (!matches.length) return result;
+
+  for (let index = 0; index < matches.length; index += 1) {
+    const match = matches[index];
+    const label = match[1];
+    const key = labelLookup.get(label);
+    const start = match.index + match[0].length;
+    const end = index + 1 < matches.length ? matches[index + 1].index : text.length;
+    const value = text.slice(start, end).replace(/^[\s|｜;；,，]+|[\s|｜;；,，]+$/g, "");
+    if (key && value) {
+      result[key] = value;
+      result.hasAny = true;
+    }
+  }
+
+  return result;
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 function buildSectionTable(title, rows) {
   const bodyRows = rows.map(([name, value]) => {
     return `<tr><td style="width:32%;font-weight:500;">${escapeHtml(name)}</td><td>${formatFieldHtml(value, name)}</td></tr>`;
@@ -671,6 +729,7 @@ async function syncMailToFeishuGroup({ record, route, subject, attachments }) {
 }
 
 function buildGroupSyncText({ record, route, subject, attachments }) {
+  const changeDescription = getChangeDescriptionParts(record);
   const lines = [
     "BOM/ECN邮件同步",
     `主题：${subject}`,
@@ -683,14 +742,16 @@ function buildGroupSyncText({ record, route, subject, attachments }) {
     ["版本号", valueToText(getField(record, "version"))],
     ["项目品牌", valueToText(getField(record, "brand"))],
     ["项目阶段", valueToText(getField(record, "phase"))],
-    ["组装工厂", route.assemblyFactory || valueToText(getField(record, "assemblyFactory"))],
+    ["组装厂", route.assemblyFactory || valueToText(getField(record, "assemblyFactory"))],
     ["BOM类型", valueToText(getField(record, "bomType"))],
     ["变更记录", valueToText(getField(record, "changeLog"))],
     ["ECN编号", valueToText(getField(record, "ecnNumber"))],
     ["变更原因", valueToText(getField(record, "changeReason"))],
-    ["变更前", valueToText(getField(record, "changeBefore"))],
-    ["变更后", valueToText(getField(record, "changeAfter"))],
-    ["执行方式", valueToText(getField(record, "executionMode"))]
+    ["变更前", valueToText(changeDescription.before)],
+    ["变更前补充描述", valueToText(changeDescription.beforeSupplement)],
+    ["变更后", valueToText(changeDescription.after)],
+    ["变更后补充描述", valueToText(changeDescription.afterSupplement)],
+    ["执行方式", valueToText(changeDescription.executionMode)]
   ];
   for (const [name, value] of detailRows) {
     if (value) lines.push(`${name}：${value}`);
