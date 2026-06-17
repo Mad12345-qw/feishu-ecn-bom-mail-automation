@@ -2,6 +2,9 @@ import assert from "node:assert/strict";
 import { buildMailHtml, buildRecipientRoute, collectAttachmentRefs, routeByAssemblyFactory } from "../src/workflow.js";
 
 const sampleRecord = {
+  "__lookupSourceIDs": [
+    Buffer.from("7550642638681538579:2F212E75-2721-4610-9EA0-50FF2B2CC46F-1:4fffa3e5f4d76a539ecec0f08ac37f83:1", "utf8").toString("base64")
+  ],
   "项目名称及项目编号": "PB2033",
   "版本号": "V 2.3",
   "项目品牌": "小米",
@@ -43,6 +46,7 @@ assert.equal(attachmentRefs[1].driveType, "sheet");
 assert.equal(attachmentRefs[2].type, "media");
 assert.equal(attachmentRefs[2].fileToken, "IF8cbIU9rov7irx9WGqcs42knDb");
 assert.equal(attachmentRefs[3].type, "approval_preview");
+assert.deepEqual(attachmentRefs[3].approvalInstanceCodes, ["2F212E75-2721-4610-9EA0-50FF2B2CC46F"]);
 assert.equal(ecnOnlyRoute.ok, false);
 assert.equal(mixedRoute.ok, true);
 assert.equal(mixedRoute.assemblyFactory, "奥海");

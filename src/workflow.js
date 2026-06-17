@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { config } from "./config.js";
-import { downloadFeishuMediaWithUserFallback, exportFeishuDriveFile, feishuApi, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
+import { downloadDirectUrlAttachment, downloadFeishuMediaWithUserFallback, exportFeishuDriveFile, feishuApi, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
 
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
@@ -82,15 +82,28 @@ export function routeByAssemblyFactory(record) {
 }
 
 export function buildRecipientRoute(record) {
-  const factoryRoute = routeByAssemblyFactory(record);
-  if (!factoryRoute.ok) return factoryRoute;
+  const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
+  if (!assemblyFactories.length) {
+    return { ok: false, reason: "缺少组装厂字段" };
+  }
+
+  let factoryRoute = {
+    ok: true,
+    assemblyFactory: assemblyFactories.join("、"),
+    to: [],
+    cc: []
+  };
+  if (config.includeFactoryRecipients) {
+    factoryRoute = routeByAssemblyFactory(record);
+    if (!factoryRoute.ok) return factoryRoute;
+  }
 
   const dynamicRecipients = normalizeEmailList([
     ...extractEmails(getField(record, "initiator")),
     ...extractEmails(getField(record, "projectManager"))
   ]);
   const fixedRecipients = normalizeEmailList(config.fixedRecipients);
-  const factoryRecipients = normalizeEmailList(factoryRoute.to);
+  const factoryRecipients = config.includeFactoryRecipients ? normalizeEmailList(factoryRoute.to) : [];
   const cc = normalizeEmailList(factoryRoute.cc);
   const to = normalizeEmailList([...fixedRecipients, ...dynamicRecipients, ...factoryRecipients]);
 
@@ -105,7 +118,7 @@ export function buildRecipientRoute(record) {
     fixedRecipients,
     dynamicRecipients,
     factoryRecipients,
-    factoryRecipientsEnabled: true
+    factoryRecipientsEnabled: config.includeFactoryRecipients
   };
 }
 
@@ -311,10 +324,36 @@ export async function syncConfiguredBitableRecords() {
 }
 
 async function listBitableRecords(source) {
+  const items = [];
+  let pageToken = "";
+
+  do {
+    const params = new URLSearchParams({ page_size: "100" });
+    if (pageToken) params.set("page_token", pageToken);
+
+    const data = await feishuApi(
+      `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records?${params}`
+    );
+    const pageItems = data.data?.items || [];
+    items.push(...await Promise.all(pageItems.map((item) => hydrateBitableRecord(source, item))));
+
+    pageToken = data.data?.page_token || "";
+    if (!data.data?.has_more) break;
+  } while (pageToken);
+
+  return items;
+}
+
+async function hydrateBitableRecord(source, item) {
+  if (item?.fields && Object.keys(item.fields).length) return item;
+
+  const recordId = item?.record_id || item?.id || "";
+  if (!recordId) return item;
+
   const data = await feishuApi(
-    `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records?page_size=100`
+    `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records/${encodeURIComponent(recordId)}`
   );
-  return data.data?.items || [];
+  return data.data?.record || item;
 }
 
 async function syncBitableSource(source, items, lookupRecords) {
@@ -403,12 +442,15 @@ function enrichTriggerRecord(triggerFields, lookupRecords) {
   if (!relatedRecords.length) return triggerFields;
 
   const merged = {};
+  const lookupSourceIds = [];
   for (const related of relatedRecords) {
+    if (related.fields?.SourceID) lookupSourceIds.push(related.fields.SourceID);
     Object.assign(merged, omitBomOwnedFields(related.fields));
   }
 
   return {
     ...merged,
+    __lookupSourceIDs: lookupSourceIds,
     ...triggerFields
   };
 }
@@ -452,6 +494,9 @@ function getRelationCandidates(fields) {
     getField(fields, "ecnNumber"),
     fields["关联审批字段"],
     fields["关联ECN"],
+    fields["ECN关联"],
+    fields["关联ECN审批"],
+    fields["ECN关联审批"],
     fields["关联ECR审批"],
     fields["SourceID"],
     fields["申请编号"]
@@ -726,9 +771,15 @@ function formatFieldHtml(value, fieldName = "") {
 }
 
 export function collectAttachmentRefs(record) {
+  const bomApprovalInstanceCodes = getApprovalInstanceCodesFromSourceIds([record.SourceID]);
+  const ecnApprovalInstanceCodes = getApprovalInstanceCodesFromSourceIds(record.__lookupSourceIDs || []);
   const refs = [
-    ...getFieldValues(record, "bomAttachments").flatMap(extractAttachmentRefs),
-    ...getFieldValues(record, "ecnAttachments").flatMap(extractAttachmentRefs)
+    ...getFieldValues(record, "bomAttachments").flatMap((value) => extractAttachmentRefs(value, {
+      approvalInstanceCodes: bomApprovalInstanceCodes
+    })),
+    ...getFieldValues(record, "ecnAttachments").flatMap((value) => extractAttachmentRefs(value, {
+      approvalInstanceCodes: ecnApprovalInstanceCodes
+    }))
   ];
   const seen = new Set();
   return refs.filter((ref) => {
@@ -739,9 +790,9 @@ export function collectAttachmentRefs(record) {
   });
 }
 
-function extractAttachmentRefs(value) {
+function extractAttachmentRefs(value, context = {}) {
   if (!value) return [];
-  if (Array.isArray(value)) return value.flatMap(extractAttachmentRefs);
+  if (Array.isArray(value)) return value.flatMap((item) => extractAttachmentRefs(item, context));
   if (typeof value === "object") {
     const fileToken = value.file_token || value.fileToken || value.token;
     const name = value.name || value.file_name || value.filename || value.title || value.text || "attachment";
@@ -753,18 +804,18 @@ function extractAttachmentRefs(value) {
       }];
     }
     const href = value.url || value.link || value.tmp_url || value.download_url;
-    return href ? extractAttachmentRefsFromText(href, name) : [];
+    return href ? extractAttachmentRefsFromText(href, name, context) : [];
   }
-  return extractAttachmentRefsFromText(value);
+  return extractAttachmentRefsFromText(value, "attachment", context);
 }
 
-function extractAttachmentRefsFromText(value, fallbackName = "attachment") {
+function extractAttachmentRefsFromText(value, fallbackName = "attachment", context = {}) {
   const text = String(value || "");
   const urls = text.match(/https?:\/\/[^\s"'<>]+/g) || [];
-  return urls.flatMap((url) => createAttachmentRefsFromUrl(url, fallbackName));
+  return urls.flatMap((url) => createAttachmentRefsFromUrl(url, fallbackName, context));
 }
 
-function createAttachmentRefsFromUrl(rawUrl, fallbackName = "attachment") {
+function createAttachmentRefsFromUrl(rawUrl, fallbackName = "attachment", context = {}) {
   let url;
   try {
     url = new URL(rawUrl);
@@ -819,11 +870,43 @@ function createAttachmentRefsFromUrl(rawUrl, fallbackName = "attachment") {
     return [{
       type: "approval_preview",
       name: normalizeAttachmentFilename(fallbackName, "bin"),
-      url: rawUrl
+      url: rawUrl,
+      approvalInstanceCodes: context.approvalInstanceCodes || []
     }];
   }
 
   return [];
+}
+
+function getApprovalInstanceCodesFromSourceIds(values) {
+  const sourceIds = Array.isArray(values) ? values : [values];
+  const codes = sourceIds
+    .map(extractApprovalInstanceCodeFromSourceId)
+    .filter(Boolean);
+  return [...new Set(codes)];
+}
+
+function extractApprovalInstanceCodeFromSourceId(value) {
+  const text = valueToText(value).trim();
+  if (!text) return "";
+
+  const decoded = decodeMaybeBase64(text);
+  const parts = decoded.split(":");
+  for (const part of parts) {
+    const match = part.match(/^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:-\d+)?$/i);
+    if (match) return match[1];
+  }
+  return "";
+}
+
+function decodeMaybeBase64(value) {
+  if (value.includes(":")) return value;
+  try {
+    const decoded = Buffer.from(value, "base64").toString("utf8");
+    return decoded.includes(":") ? decoded : value;
+  } catch {
+    return value;
+  }
 }
 
 function normalizeAttachmentFilename(value, extension) {
@@ -838,25 +921,105 @@ function isAttachmentLikeField(fieldName) {
 
 async function downloadMailAttachments(attachmentRefs) {
   const attachments = [];
+  const downloadedRefs = new Set();
+  const downloadedAttachmentHashes = new Set();
+  const pushAttachment = (attachment) => {
+    const hash = crypto
+      .createHash("sha256")
+      .update(attachment.content)
+      .digest("hex");
+    const key = `${attachment.filename}:${hash}`;
+    if (downloadedAttachmentHashes.has(key)) return;
+    downloadedAttachmentHashes.add(key);
+    attachments.push(attachment);
+  };
+
   for (const ref of attachmentRefs) {
     if (ref.type === "approval_preview") {
-      throw new Error(`审批预览附件无法直接作为邮件附件下载，请将字段改为可下载附件或文件链接：${ref.name}`);
+      const approvalRefs = await resolveApprovalPreviewAttachmentRefs(ref);
+      for (const approvalRef of approvalRefs) {
+        if (downloadedRefs.has(approvalRef.url)) continue;
+        downloadedRefs.add(approvalRef.url);
+        pushAttachment(await downloadDirectUrlAttachment(approvalRef.url, approvalRef.name));
+      }
+      continue;
     }
     if (ref.type === "drive_folder") {
       throw new Error(`飞书文件夹链接不能直接作为单个邮件附件发送，请改为具体文件链接或附件字段：${ref.url}`);
     }
     if (ref.type === "export") {
-      attachments.push(await exportFeishuDriveFile({
+      const key = `export:${ref.driveType}:${ref.driveToken}:${ref.fileExtension}`;
+      if (downloadedRefs.has(key)) continue;
+      downloadedRefs.add(key);
+      const attachment = await exportFeishuDriveFile({
         token: ref.driveToken,
         type: ref.driveType,
         fileExtension: ref.fileExtension,
         filename: ref.name
-      }));
+      });
+      pushAttachment(attachment);
       continue;
     }
-    attachments.push(await downloadFeishuMediaWithUserFallback(ref.fileToken, ref.name));
+    const key = `media:${ref.fileToken}`;
+    if (downloadedRefs.has(key)) continue;
+    downloadedRefs.add(key);
+    pushAttachment(await downloadFeishuMediaWithUserFallback(ref.fileToken, ref.name));
   }
   return attachments;
+}
+
+async function resolveApprovalPreviewAttachmentRefs(ref) {
+  const instanceCodes = ref.approvalInstanceCodes || [];
+  if (!instanceCodes.length) {
+    throw new Error(`审批预览附件缺少审批实例 SourceID，无法下载：${ref.name}`);
+  }
+
+  const refs = [];
+  for (const instanceCode of instanceCodes) {
+    const data = await feishuApi(`/approval/v4/instances/${encodeURIComponent(instanceCode)}`);
+    const formItems = parseApprovalForm(data.data?.form);
+    for (const item of formItems) {
+      if (item?.type !== "attachmentV2") continue;
+      const urls = Array.isArray(item.value) ? item.value : [item.value].filter(Boolean);
+      const names = getApprovalAttachmentNames(item, urls.length);
+      urls.forEach((url, index) => {
+        if (url) {
+          refs.push({
+            type: "direct_download",
+            url,
+            name: normalizeAttachmentFilename(names[index] || item.name || ref.name, "bin")
+          });
+        }
+      });
+    }
+  }
+
+  if (!refs.length) {
+    throw new Error(`审批实例未找到可下载附件：${ref.name}`);
+  }
+  return refs;
+}
+
+function parseApprovalForm(form) {
+  if (Array.isArray(form)) return form;
+  if (!form) return [];
+  try {
+    const parsed = JSON.parse(form);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function getApprovalAttachmentNames(item, count) {
+  const fallback = item.name || "attachment";
+  if (Array.isArray(item.ext)) {
+    return item.ext.map((name) => valueToText(name) || fallback);
+  }
+  const ext = valueToText(item.ext).trim();
+  if (!ext) return Array.from({ length: count }, (_, index) => count > 1 ? `${fallback}-${index + 1}` : fallback);
+  if (count <= 1) return [ext];
+  return Array.from({ length: count }, (_, index) => `${ext}-${index + 1}`);
 }
 
 async function syncMailToFeishuGroup({ record, route, subject, attachments }) {

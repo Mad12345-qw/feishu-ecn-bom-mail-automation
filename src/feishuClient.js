@@ -112,6 +112,15 @@ export async function downloadFeishuMediaWithUserFallback(fileToken, fallbackNam
   }
 }
 
+export async function downloadDirectUrlAttachment(url, fallbackName = "attachment") {
+  const media = await requestBinary(url);
+  return {
+    filename: fallbackName,
+    contentType: media.contentType,
+    content: media.content
+  };
+}
+
 export async function exportFeishuDriveFile({ token, type, fileExtension, filename }) {
   const task = await userFeishuApi("/drive/v1/export_tasks", {
     method: "POST",
