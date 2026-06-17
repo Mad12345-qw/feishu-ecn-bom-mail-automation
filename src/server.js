@@ -192,6 +192,11 @@ const server = http.createServer(async (req, res) => {
         emailDryRun: config.emailDryRun,
         bitableConfigured: Boolean(config.bitable.sources.length),
         bitableSourceCount: config.bitable.sources.length,
+        bitableSources: config.bitable.sources.map((source) => ({
+          name: source.name,
+          appToken: source.appToken ? `${source.appToken.slice(0, 6)}...${source.appToken.slice(-4)}` : "",
+          tableId: source.tableId
+        })),
         bitableSkipExistingOnStart: config.bitable.skipExistingOnStart,
         bitableTriggerSourceNames: config.bitable.triggerSourceNames,
         bitableLookupSourceNames: config.bitable.lookupSourceNames,
