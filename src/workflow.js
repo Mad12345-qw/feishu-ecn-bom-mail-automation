@@ -139,17 +139,19 @@ export function buildMailHtml(record) {
 </html>`;
 }
 
-export async function processBusinessRecord(record) {
+export async function processBusinessRecord(record, options = {}) {
   if (!record || !Object.keys(record).length) {
     return { status: "received_no_business_fields", reason: "事件已接收，但暂未解析到业务字段" };
   }
 
-  const readiness = getRecordReadiness(record);
+  const readinessRecord = options.readinessRecord || record;
+  const routeRecord = options.routeRecord || record;
+  const readiness = getRecordReadiness(readinessRecord);
   if (!readiness.ok) {
     return { status: "skipped_not_ready", reason: readiness.reason, approvalStatus: readiness.statusText };
   }
 
-  const route = buildRecipientRoute(record);
+  const route = buildRecipientRoute(routeRecord);
   if (!route.ok) {
     return { status: "blocked", reason: route.reason };
   }
@@ -221,19 +223,52 @@ export async function syncConfiguredBitableRecords() {
 
   const sources = [];
   const results = [];
+  const snapshots = [];
   for (const source of config.bitable.sources) {
-    let sourceResult;
     try {
-      sourceResult = await syncBitableSource(source);
+      snapshots.push({
+        source,
+        items: await listBitableRecords(source)
+      });
     } catch (error) {
+      snapshots.push({
+        source,
+        error: error.message,
+        items: []
+      });
+    }
+  }
+
+  const lookupRecords = snapshots
+    .filter((snapshot) => !snapshot.error && isLookupSource(snapshot.source))
+    .flatMap((snapshot) => snapshot.items.map((item) => ({
+      source: snapshot.source,
+      recordId: item.record_id || item.id || "",
+      fields: item.fields || {}
+    })));
+
+  for (const snapshot of snapshots) {
+    let sourceResult;
+    if (snapshot.error) {
       sourceResult = {
-        source: describeBitableSource(source),
+        source: describeBitableSource(snapshot.source),
         total: 0,
         processed: 0,
-        error: error.message,
+        error: snapshot.error,
         results: []
       };
+    } else if (!isTriggerSource(snapshot.source)) {
+      sourceResult = {
+        source: describeBitableSource(snapshot.source),
+        total: snapshot.items.length,
+        processed: 0,
+        role: "lookup",
+        results: []
+      };
+    } else {
+      sourceResult = await syncBitableSource(snapshot.source, snapshot.items, lookupRecords);
     }
+
     sources.push(sourceResult);
     for (const item of sourceResult.results) {
       results.push({
@@ -253,16 +288,19 @@ export async function syncConfiguredBitableRecords() {
   };
 }
 
-async function syncBitableSource(source) {
-  const sourceId = getBitableSourceId(source);
+async function listBitableRecords(source) {
   const data = await feishuApi(
     `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records?page_size=100`
   );
+  return data.data?.items || [];
+}
 
-  const items = data.data?.items || [];
+async function syncBitableSource(source, items, lookupRecords) {
+  const sourceId = getBitableSourceId(source);
   const results = [];
   for (const item of items) {
     const fields = item.fields || {};
+    const enrichedFields = enrichTriggerRecord(fields, lookupRecords);
     const recordId = item.record_id || item.id || "";
     const recordKey = `${sourceId}:${recordId}`;
 
@@ -293,7 +331,10 @@ async function syncBitableSource(source) {
     }
 
     try {
-      const result = await processBusinessRecord(fields);
+      const result = await processBusinessRecord(enrichedFields, {
+        readinessRecord: fields,
+        routeRecord: fields
+      });
       if (result.status !== "blocked") {
         recordStatusByKey.set(recordKey, readiness.statusText);
       }
@@ -322,8 +363,75 @@ function describeBitableSource(source) {
   return {
     name: source.name,
     appToken: maskToken(source.appToken),
-    tableId: source.tableId
+    tableId: source.tableId,
+    role: isTriggerSource(source) ? "trigger" : "lookup"
   };
+}
+
+function isTriggerSource(source) {
+  return config.bitable.triggerSourceNames.includes(source.name);
+}
+
+function isLookupSource(source) {
+  return config.bitable.lookupSourceNames.includes(source.name) || !isTriggerSource(source);
+}
+
+function enrichTriggerRecord(triggerFields, lookupRecords) {
+  const relatedRecords = findRelatedLookupRecords(triggerFields, lookupRecords);
+  if (!relatedRecords.length) return triggerFields;
+
+  const merged = {};
+  for (const related of relatedRecords) {
+    Object.assign(merged, related.fields);
+  }
+
+  return {
+    ...merged,
+    ...triggerFields
+  };
+}
+
+function findRelatedLookupRecords(triggerFields, lookupRecords) {
+  const triggerCandidates = getRelationCandidates(triggerFields);
+  if (!triggerCandidates.length) return [];
+
+  return lookupRecords.filter((lookupRecord) => {
+    const lookupCandidates = getRelationCandidates(lookupRecord.fields);
+    return triggerCandidates.some((triggerValue) => {
+      return lookupCandidates.some((lookupValue) => relationMatches(triggerValue, lookupValue));
+    });
+  });
+}
+
+function getRelationCandidates(fields) {
+  const directValues = [
+    getField(fields, "ecnNumber"),
+    fields["关联审批字段"],
+    fields["关联ECN"],
+    fields["关联ECR审批"],
+    fields["SourceID"],
+    fields["申请编号"]
+  ];
+
+  return [...new Set(directValues
+    .flatMap((value) => valueToText(value).split(/[、,，;；\n\r]/))
+    .map(normalizeRelationValue)
+    .filter((value) => value.length >= 4))];
+}
+
+function relationMatches(left, right) {
+  if (!left || !right) return false;
+  if (left === right) return true;
+  if (left.length >= 8 && right.includes(left)) return true;
+  if (right.length >= 8 && left.includes(right)) return true;
+  return false;
+}
+
+function normalizeRelationValue(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, "")
+    .replace(/[，。；;、]/g, "");
 }
 
 function maskToken(value) {

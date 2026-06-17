@@ -85,7 +85,9 @@ export const config = {
     appToken: process.env.BITABLE_APP_TOKEN || "",
     tableId: process.env.BITABLE_TABLE_ID || "",
     sources: parseBitableSources(),
-    skipExistingOnStart: parseBoolean(process.env.BITABLE_SKIP_EXISTING_ON_START, false)
+    skipExistingOnStart: parseBoolean(process.env.BITABLE_SKIP_EXISTING_ON_START, false),
+    triggerSourceNames: parseTextList(process.env.BITABLE_TRIGGER_SOURCE_NAMES, ["正式表1", "BOM", "BOM释放", "BOM释放表"]),
+    lookupSourceNames: parseTextList(process.env.BITABLE_LOOKUP_SOURCE_NAMES, ["正式表2", "ECN", "ECN表", "ECN变更通知"])
   },
   safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
   emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),

@@ -181,6 +181,8 @@ const server = http.createServer(async (req, res) => {
         bitableConfigured: Boolean(config.bitable.sources.length),
         bitableSourceCount: config.bitable.sources.length,
         bitableSkipExistingOnStart: config.bitable.skipExistingOnStart,
+        bitableTriggerSourceNames: config.bitable.triggerSourceNames,
+        bitableLookupSourceNames: config.bitable.lookupSourceNames,
         fixedRecipientCount: config.fixedRecipients.length,
         includeFactoryRecipients: config.includeFactoryRecipients,
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
