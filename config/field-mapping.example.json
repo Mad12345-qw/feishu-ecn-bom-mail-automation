@@ -6,10 +6,10 @@
   "approvalStatus": "申请状态",
   "initiator": "发起人邮箱",
   "projectManager": "项目经理邮箱",
-  "assemblyFactory": "组装工厂",
+  "assemblyFactory": "组装厂",
   "bomType": "BOM类型",
   "changeLog": "变更记录",
-  "bomAttachments": "BOM释放附件下载链接",
+  "bomAttachments": "BOM释放附件",
   "previousBomRecord": "上一个版本BOM释放记录",
   "ecnAttachments": "ECN变更通知书附件"
 }

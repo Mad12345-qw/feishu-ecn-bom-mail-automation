@@ -618,7 +618,7 @@ function formatFieldHtml(value, fieldName = "") {
   return escapeHtml(String(value));
 }
 
-function collectAttachmentRefs(record) {
+export function collectAttachmentRefs(record) {
   const refs = [
     ...extractAttachmentRefs(getField(record, "bomAttachments")),
     ...extractAttachmentRefs(getField(record, "ecnAttachments"))
