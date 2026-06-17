@@ -446,11 +446,55 @@ export function mapFeishuEventToRecord(eventBody) {
   return fields && typeof fields === "object" ? fields : {};
 }
 
+export function guardFeishuEventTriggerSource(eventBody) {
+  const eventType = getFeishuEventType(eventBody);
+  const eventSource = extractFeishuEventBitableSource(eventBody);
+  const hasSource = eventSource.appTokens.length || eventSource.tableIds.length;
+  const looksLikeBitableEvent = isBitableEvent(eventBody, eventType);
+
+  if (!hasSource && !looksLikeBitableEvent) {
+    return { ok: true, reason: "event_source_not_required" };
+  }
+
+  if (!hasSource) {
+    return {
+      ok: false,
+      status: "skipped_unknown_bitable_source",
+      reason: "无法确认事件来源为BOM触发表，已跳过发送"
+    };
+  }
+
+  const matchedSource = config.bitable.sources.find((source) => eventSourceMatches(source, eventSource));
+  if (!matchedSource) {
+    return {
+      ok: false,
+      status: "skipped_unconfigured_bitable_source",
+      reason: "事件来源表不在当前配置内，已跳过发送",
+      eventSource
+    };
+  }
+
+  if (!isTriggerSource(matchedSource)) {
+    return {
+      ok: false,
+      status: "skipped_lookup_source",
+      reason: `事件来源为${matchedSource.name}，该表仅用于带出ECN内容，不触发邮件`,
+      source: describeBitableSource(matchedSource)
+    };
+  }
+
+  return {
+    ok: true,
+    reason: "trigger_source_matched",
+    source: describeBitableSource(matchedSource)
+  };
+}
+
 export function summarizeFeishuEvent(eventBody) {
   const header = eventBody.header || {};
   const event = eventBody.event || eventBody;
   const eventId = header.event_id || eventBody.uuid || event.uuid || event.instance_code || event.record_id || "";
-  const eventType = header.event_type || eventBody.type || event.type || event.event_type || "";
+  const eventType = getFeishuEventType(eventBody);
   const record = mapFeishuEventToRecord(eventBody);
 
   return {
@@ -460,6 +504,62 @@ export function summarizeFeishuEvent(eventBody) {
     eventKeys: Object.keys(event || {}).slice(0, 30),
     parsedFieldKeys: Object.keys(record || {}).slice(0, 30)
   };
+}
+
+function getFeishuEventType(eventBody) {
+  const header = eventBody.header || {};
+  const event = eventBody.event || eventBody;
+  return header.event_type || eventBody.type || event.type || event.event_type || "";
+}
+
+function isBitableEvent(eventBody, eventType) {
+  const event = eventBody.event || eventBody;
+  return /bitable|base|record/i.test(String(eventType || ""))
+    || Boolean(event.record || event.record_id || event.recordId || event.fields);
+}
+
+function extractFeishuEventBitableSource(eventBody) {
+  return {
+    appTokens: collectValuesByKeys(eventBody, ["app_token", "appToken", "base_token", "baseToken", "obj_token", "objToken"]),
+    tableIds: collectValuesByKeys(eventBody, ["table_id", "tableId", "table_token", "tableToken"])
+  };
+}
+
+function collectValuesByKeys(root, keys) {
+  const normalizedKeys = new Set(keys.map(normalizeEventKey));
+  const values = [];
+  const seen = new Set();
+
+  function visit(value) {
+    if (!value || typeof value !== "object" || seen.has(value)) return;
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      for (const item of value) visit(item);
+      return;
+    }
+
+    for (const [key, child] of Object.entries(value)) {
+      if (normalizedKeys.has(normalizeEventKey(key))) {
+        const text = valueToText(child).trim();
+        if (text) values.push(text);
+      }
+      visit(child);
+    }
+  }
+
+  visit(root);
+  return [...new Set(values)];
+}
+
+function normalizeEventKey(key) {
+  return String(key || "").toLowerCase().replace(/[_-]/g, "");
+}
+
+function eventSourceMatches(source, eventSource) {
+  const appTokenMatched = !eventSource.appTokens.length || eventSource.appTokens.includes(source.appToken);
+  const tableIdMatched = !eventSource.tableIds.length || eventSource.tableIds.includes(source.tableId);
+  return appTokenMatched && tableIdMatched;
 }
 
 export function isDuplicateEvent(eventId) {

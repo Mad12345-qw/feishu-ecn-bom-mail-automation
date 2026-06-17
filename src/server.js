@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
 import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
-import { isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
+import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -65,6 +65,18 @@ async function handleFeishuWebhook(req, res) {
     const duplicate = { status: "duplicate_ignored", eventId: summary.eventId, eventType: summary.eventType };
     appendLog({ type: "feishu_webhook", summary, result: duplicate });
     return sendJson(res, 200, duplicate);
+  }
+
+  const sourceGuard = guardFeishuEventTriggerSource(body);
+  if (!sourceGuard.ok) {
+    const skipped = {
+      status: sourceGuard.status || "skipped_non_trigger_source",
+      reason: sourceGuard.reason,
+      source: sourceGuard.source,
+      eventSource: sourceGuard.eventSource
+    };
+    appendLog({ type: "feishu_webhook", summary, result: skipped });
+    return sendJson(res, 200, skipped);
   }
 
   const record = mapFeishuEventToRecord(body);
