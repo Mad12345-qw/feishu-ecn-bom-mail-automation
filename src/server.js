@@ -182,6 +182,7 @@ const server = http.createServer(async (req, res) => {
         bitableSourceCount: config.bitable.sources.length,
         bitableSkipExistingOnStart: config.bitable.skipExistingOnStart,
         fixedRecipientCount: config.fixedRecipients.length,
+        includeFactoryRecipients: config.includeFactoryRecipients,
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
         userMailAuth: getUserAuthStatus()
       });

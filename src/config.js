@@ -81,6 +81,7 @@ export const config = {
   },
   safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
   emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),
+  includeFactoryRecipients: parseBoolean(process.env.INCLUDE_FACTORY_RECIPIENTS, false),
   fixedRecipients: parseCsvList(process.env.FIXED_RECIPIENTS),
   testRecipients: parseCsvList(process.env.TEST_RECIPIENTS),
   assemblyFactories: readJson("config/assembly-factories.json", {}),

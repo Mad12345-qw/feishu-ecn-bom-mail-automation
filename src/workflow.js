@@ -67,8 +67,15 @@ export function routeByAssemblyFactory(record) {
 }
 
 export function buildRecipientRoute(record) {
-  const factoryRoute = routeByAssemblyFactory(record);
-  if (!factoryRoute.ok) return factoryRoute;
+  const factoryRoute = config.includeFactoryRecipients
+    ? routeByAssemblyFactory(record)
+    : {
+        ok: true,
+        assemblyFactory: valueToText(getField(record, "assemblyFactory")),
+        to: [],
+        cc: []
+      };
+  if (config.includeFactoryRecipients && !factoryRoute.ok) return factoryRoute;
 
   const dynamicRecipients = normalizeEmailList([
     ...extractEmails(getField(record, "initiator")),
@@ -89,7 +96,8 @@ export function buildRecipientRoute(record) {
     cc,
     fixedRecipients,
     dynamicRecipients,
-    factoryRecipients
+    factoryRecipients,
+    factoryRecipientsEnabled: config.includeFactoryRecipients
   };
 }
 
@@ -164,6 +172,7 @@ export async function processBusinessRecord(record) {
       fixedRecipients: route.fixedRecipients,
       dynamicRecipients: route.dynamicRecipients,
       factoryRecipients: route.factoryRecipients,
+      factoryRecipientsEnabled: route.factoryRecipientsEnabled,
       feishuGroupSync: config.feishu.syncChatId ? "planned" : "not_configured",
       subject,
       attachments: attachmentRefs.map(({ name, fileToken }) => ({ name, fileToken })),
@@ -189,6 +198,7 @@ export async function processBusinessRecord(record) {
     fixedRecipients: route.fixedRecipients,
     dynamicRecipients: route.dynamicRecipients,
     factoryRecipients: route.factoryRecipients,
+    factoryRecipientsEnabled: route.factoryRecipientsEnabled,
     attachments: attachments.map((item) => ({ filename: item.filename, bytes: item.content.length })),
     result,
     groupSync
