@@ -11,5 +11,6 @@
   "changeLog": "变更记录",
   "bomAttachments": "BOM释放附件",
   "previousBomRecord": "上一个版本BOM释放记录",
+  "changeDepartment": "变更部门",
   "ecnAttachments": "ECN变更通知书附件"
 }

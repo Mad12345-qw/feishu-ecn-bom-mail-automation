@@ -198,6 +198,7 @@ const server = http.createServer(async (req, res) => {
         fieldMapping: {
           assemblyFactory: config.fieldMapping.assemblyFactory,
           bomAttachments: config.fieldMapping.bomAttachments,
+          changeDepartment: config.fieldMapping.changeDepartment,
           changeDescription: config.fieldMapping.changeDescription
         },
         fixedRecipientCount: config.fixedRecipients.length,

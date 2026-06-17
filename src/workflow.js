@@ -1,6 +1,6 @@
 import crypto from "node:crypto";
 import { config } from "./config.js";
-import { downloadFeishuMedia, feishuApi, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
+import { downloadFeishuMediaWithUserFallback, exportFeishuDriveFile, feishuApi, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
 
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
@@ -14,6 +14,20 @@ function getField(source, key) {
     if (value !== undefined && value !== null && value !== "") return value;
   }
   return "";
+}
+
+function getFieldValues(source, key) {
+  const configured = config.fieldMapping[key] || key;
+  const fieldNames = Array.isArray(configured) ? configured : [configured];
+  const seen = new Set();
+  const values = [];
+  for (const fieldName of [...fieldNames, key]) {
+    if (seen.has(fieldName)) continue;
+    seen.add(fieldName);
+    const value = source[fieldName];
+    if (value !== undefined && value !== null && value !== "") values.push(value);
+  }
+  return values;
 }
 
 function normalizeEmailList(items) {
@@ -177,7 +191,14 @@ export async function processBusinessRecord(record, options = {}) {
       factoryRecipientsEnabled: route.factoryRecipientsEnabled,
       feishuGroupSync: config.feishu.syncChatId ? "planned" : "not_configured",
       subject,
-      attachments: attachmentRefs.map(({ name, fileToken }) => ({ name, fileToken })),
+      attachments: attachmentRefs.map((ref) => ({
+        name: ref.name,
+        type: ref.type,
+        fileToken: ref.fileToken,
+        driveType: ref.driveType,
+        fileExtension: ref.fileExtension,
+        url: ref.url
+      })),
       htmlPreview: html.slice(0, 300)
     };
   }
@@ -383,13 +404,35 @@ function enrichTriggerRecord(triggerFields, lookupRecords) {
 
   const merged = {};
   for (const related of relatedRecords) {
-    Object.assign(merged, related.fields);
+    Object.assign(merged, omitBomOwnedFields(related.fields));
   }
 
   return {
     ...merged,
     ...triggerFields
   };
+}
+
+function omitBomOwnedFields(fields) {
+  const protectedKeys = [
+    "projectNameOrCode",
+    "version",
+    "brand",
+    "phase",
+    "approvalStatus",
+    "initiator",
+    "projectManager",
+    "assemblyFactory",
+    "bomType",
+    "changeLog",
+    "bomAttachments",
+    "previousBomAttachment"
+  ];
+  const aliases = new Set(protectedKeys.flatMap((key) => {
+    const configured = config.fieldMapping[key] || key;
+    return Array.isArray(configured) ? configured : [configured];
+  }));
+  return Object.fromEntries(Object.entries(fields || {}).filter(([fieldName]) => !aliases.has(fieldName)));
 }
 
 function findRelatedLookupRecords(triggerFields, lookupRecords) {
@@ -669,22 +712,29 @@ function formatFieldHtml(value, fieldName = "") {
     }
     const href = value.url || value.link || value.tmp_url || value.download_url;
     if (href) {
+      if (isAttachmentLikeField(fieldName)) {
+        return `${escapeHtml(String(text || "附件"))}（已作为邮件附件发送）`;
+      }
       return `<a href="${escapeHtml(String(href))}">${escapeHtml(String(text || href))}</a>`;
     }
     return escapeHtml(String(text));
+  }
+  if (isAttachmentLikeField(fieldName) && extractAttachmentRefs(value).length) {
+    return "已作为邮件附件发送";
   }
   return escapeHtml(String(value));
 }
 
 export function collectAttachmentRefs(record) {
   const refs = [
-    ...extractAttachmentRefs(getField(record, "bomAttachments")),
-    ...extractAttachmentRefs(getField(record, "ecnAttachments"))
+    ...getFieldValues(record, "bomAttachments").flatMap(extractAttachmentRefs),
+    ...getFieldValues(record, "ecnAttachments").flatMap(extractAttachmentRefs)
   ];
   const seen = new Set();
   return refs.filter((ref) => {
-    if (!ref.fileToken || seen.has(ref.fileToken)) return false;
-    seen.add(ref.fileToken);
+    const key = ref.fileToken || ref.url || `${ref.type}:${ref.name}`;
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
     return true;
   });
 }
@@ -694,20 +744,117 @@ function extractAttachmentRefs(value) {
   if (Array.isArray(value)) return value.flatMap(extractAttachmentRefs);
   if (typeof value === "object") {
     const fileToken = value.file_token || value.fileToken || value.token;
-    if (!fileToken) return [];
+    const name = value.name || value.file_name || value.filename || value.title || value.text || "attachment";
+    if (fileToken) {
+      return [{
+        type: "media",
+        fileToken,
+        name
+      }];
+    }
+    const href = value.url || value.link || value.tmp_url || value.download_url;
+    return href ? extractAttachmentRefsFromText(href, name) : [];
+  }
+  return extractAttachmentRefsFromText(value);
+}
+
+function extractAttachmentRefsFromText(value, fallbackName = "attachment") {
+  const text = String(value || "");
+  const urls = text.match(/https?:\/\/[^\s"'<>]+/g) || [];
+  return urls.flatMap((url) => createAttachmentRefsFromUrl(url, fallbackName));
+}
+
+function createAttachmentRefsFromUrl(rawUrl, fallbackName = "attachment") {
+  let url;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return [];
+  }
+
+  const pathParts = url.pathname.split("/").filter(Boolean);
+  const token = pathParts[pathParts.length - 1] || "";
+  if (!token) return [];
+
+  if (url.pathname.includes("/file/")) {
     return [{
-      fileToken,
-      name: value.name || value.file_name || value.filename || "attachment"
+      type: "media",
+      fileToken: token,
+      name: normalizeAttachmentFilename(fallbackName, "bin"),
+      url: rawUrl
     }];
   }
+
+  if (url.pathname.includes("/sheets/")) {
+    return [{
+      type: "export",
+      driveToken: token,
+      driveType: "sheet",
+      fileExtension: "xlsx",
+      name: normalizeAttachmentFilename(fallbackName, "xlsx"),
+      url: rawUrl
+    }];
+  }
+
+  if (url.pathname.includes("/drive/folder/")) {
+    return [{
+      type: "drive_folder",
+      name: normalizeAttachmentFilename(fallbackName, "zip"),
+      url: rawUrl
+    }];
+  }
+
+  if (url.pathname.includes("/docx/")) {
+    return [{
+      type: "export",
+      driveToken: token,
+      driveType: "docx",
+      fileExtension: "docx",
+      name: normalizeAttachmentFilename(fallbackName, "docx"),
+      url: rawUrl
+    }];
+  }
+
+  if (url.pathname.includes("/approval/admin/previewAttachment")) {
+    return [{
+      type: "approval_preview",
+      name: normalizeAttachmentFilename(fallbackName, "bin"),
+      url: rawUrl
+    }];
+  }
+
   return [];
+}
+
+function normalizeAttachmentFilename(value, extension) {
+  const text = valueToText(value).trim() || "attachment";
+  const safe = text.replace(/[\\/:*?"<>|]/g, "_").slice(0, 120) || "attachment";
+  return /\.[A-Za-z0-9]{2,8}$/.test(safe) ? safe : `${safe}.${extension}`;
+}
+
+function isAttachmentLikeField(fieldName) {
+  return String(fieldName || "").includes("附件");
 }
 
 async function downloadMailAttachments(attachmentRefs) {
   const attachments = [];
   for (const ref of attachmentRefs) {
-    const media = await downloadFeishuMedia(ref.fileToken, ref.name);
-    attachments.push(media);
+    if (ref.type === "approval_preview") {
+      throw new Error(`审批预览附件无法直接作为邮件附件下载，请将字段改为可下载附件或文件链接：${ref.name}`);
+    }
+    if (ref.type === "drive_folder") {
+      throw new Error(`飞书文件夹链接不能直接作为单个邮件附件发送，请改为具体文件链接或附件字段：${ref.url}`);
+    }
+    if (ref.type === "export") {
+      attachments.push(await exportFeishuDriveFile({
+        token: ref.driveToken,
+        type: ref.driveType,
+        fileExtension: ref.fileExtension,
+        filename: ref.name
+      }));
+      continue;
+    }
+    attachments.push(await downloadFeishuMediaWithUserFallback(ref.fileToken, ref.name));
   }
   return attachments;
 }

@@ -17,7 +17,13 @@ const sampleRecord = {
       "name": "PB2033_电子BOM_V10_20260609_BSMI.xlsx"
     }
   ],
-  "ECN变更通知书附件": "ECO-PROJ-D-18-V1.7 量产产品设计变更通知书.xlsx",
+  "BOM释放附件链接": "https://rcnriirbjrdb.feishu.cn/sheets/WSRKsNz5shBAljtY246cSbNYnus https://rcnriirbjrdb.feishu.cn/file/IF8cbIU9rov7irx9WGqcs42knDb",
+  "ECN变更通知书附件": {
+    "link": "https://www.feishu.cn/approval/admin/previewAttachment?key=mock_preview_key",
+    "text": "1 个附件"
+  },
+  "发起人部门": "项目部",
+  "变更部门": "供应链部",
   "变更描述": "变更前:C415,C419原来只有1个替代料 | 变更后:C415,C419增加多1个替代料 | 执行方式:立即变更"
 };
 
@@ -30,12 +36,19 @@ const mixedRoute = routeByAssemblyFactory({ "组装厂": "奥海", "执行单位
 
 assert.equal(route.ok, true);
 assert.equal(route.assemblyFactory, "奥海");
-assert.equal(attachmentRefs.length, 1);
+assert.equal(attachmentRefs.length, 4);
 assert.equal(attachmentRefs[0].fileToken, "mock_bom_file_token");
+assert.equal(attachmentRefs[1].type, "export");
+assert.equal(attachmentRefs[1].driveType, "sheet");
+assert.equal(attachmentRefs[2].type, "media");
+assert.equal(attachmentRefs[2].fileToken, "IF8cbIU9rov7irx9WGqcs42knDb");
+assert.equal(attachmentRefs[3].type, "approval_preview");
 assert.equal(ecnOnlyRoute.ok, false);
 assert.equal(mixedRoute.ok, true);
 assert.equal(mixedRoute.assemblyFactory, "奥海");
 assert.equal(html.includes("组装厂"), true);
+assert.equal(html.includes("供应链部"), true);
+assert.equal(html.includes("项目部"), false);
 assert.equal(html.includes("C415,C419原来只有1个替代料"), true);
 assert.equal(html.includes("C415,C419增加多1个替代料"), true);
 assert.equal(html.includes("立即变更"), true);

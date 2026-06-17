@@ -28,6 +28,26 @@ async function requestJson(url, options = {}) {
   return data;
 }
 
+async function requestBinary(url, options = {}) {
+  const response = await fetch(url, options);
+  const contentType = response.headers.get("content-type") || "application/octet-stream";
+  const content = Buffer.from(await response.arrayBuffer());
+
+  if (!response.ok) {
+    let message = response.statusText;
+    try {
+      const text = content.toString("utf8");
+      const data = text ? JSON.parse(text) : {};
+      message = data.msg || data.message || message;
+    } catch {
+      // Binary or empty error bodies do not need extra parsing.
+    }
+    throw new Error(message);
+  }
+
+  return { contentType, content };
+}
+
 export async function getTenantAccessToken() {
   const now = Date.now();
   if (cachedTenantToken && cachedTenantTokenExpiresAt > now + 60_000) {
@@ -60,30 +80,79 @@ export async function feishuApi(path, options = {}) {
 
 export async function downloadFeishuMedia(fileToken, fallbackName = "attachment") {
   const token = await getTenantAccessToken();
-  const response = await fetch(`${FEISHU_BASE_URL}/drive/v1/medias/${encodeURIComponent(fileToken)}/download`, {
+  const media = await requestBinary(`${FEISHU_BASE_URL}/drive/v1/medias/${encodeURIComponent(fileToken)}/download`, {
     headers: {
       authorization: `Bearer ${token}`
     }
   });
-  const contentType = response.headers.get("content-type") || "application/octet-stream";
-  const content = Buffer.from(await response.arrayBuffer());
-
-  if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const text = content.toString("utf8");
-      const data = text ? JSON.parse(text) : {};
-      message = data.msg || data.message || message;
-    } catch {
-      // Binary or empty error bodies do not need extra parsing.
-    }
-    throw new Error(`Feishu media download failed: ${message}`);
-  }
 
   return {
     filename: fallbackName,
-    contentType,
-    content
+    contentType: media.contentType,
+    content: media.content
+  };
+}
+
+export async function downloadFeishuMediaWithUserFallback(fileToken, fallbackName = "attachment") {
+  try {
+    return await downloadFeishuMedia(fileToken, fallbackName);
+  } catch (tenantError) {
+    const token = await getUserAccessToken();
+    const media = await requestBinary(`${FEISHU_BASE_URL}/drive/v1/medias/${encodeURIComponent(fileToken)}/download`, {
+      headers: {
+        authorization: `Bearer ${token}`
+      }
+    });
+    return {
+      filename: fallbackName,
+      contentType: media.contentType,
+      content: media.content,
+      tenantError: tenantError.message
+    };
+  }
+}
+
+export async function exportFeishuDriveFile({ token, type, fileExtension, filename }) {
+  const task = await userFeishuApi("/drive/v1/export_tasks", {
+    method: "POST",
+    body: JSON.stringify({
+      file_extension: fileExtension,
+      token,
+      type
+    })
+  });
+  const ticket = task.data?.ticket || task.ticket;
+  if (!ticket) {
+    throw new Error("Feishu export task did not return a ticket");
+  }
+
+  let fileToken = "";
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 1000));
+    const status = await userFeishuApi(`/drive/v1/export_tasks/${encodeURIComponent(ticket)}?token=${encodeURIComponent(token)}`);
+    const result = status.data?.result || status.data || status;
+    fileToken = result.file_token || result.fileToken || "";
+    const jobStatus = result.job_status || result.jobStatus || result.status;
+    if (fileToken) break;
+    if (jobStatus === 3 || jobStatus === "failed" || jobStatus === "fail") {
+      throw new Error(`Feishu export task failed: ${JSON.stringify(result)}`);
+    }
+  }
+
+  if (!fileToken) {
+    throw new Error("Feishu export task timed out before returning file_token");
+  }
+
+  const userToken = await getUserAccessToken();
+  const media = await requestBinary(`${FEISHU_BASE_URL}/drive/v1/export_tasks/file/${encodeURIComponent(fileToken)}/download`, {
+    headers: {
+      authorization: `Bearer ${userToken}`
+    }
+  });
+  return {
+    filename,
+    contentType: media.contentType,
+    content: media.content
   };
 }
 
