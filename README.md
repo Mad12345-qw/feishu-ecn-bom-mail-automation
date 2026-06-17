@@ -129,3 +129,11 @@ READY_STATUS_VALUES=已通过,审批通过,完成,已完成,已发布
 ```text
 INCLUDE_FACTORY_RECIPIENTS=true
 ```
+
+历史漏发记录不要用全表同步补发，使用单条补发入口：
+
+```text
+https://你的-render-service.onrender.com/debug/send-bitable-record?token=你的VerificationToken&source=触发表tableId&recordId=记录ID
+```
+
+例如 `source` 可填写 BOM 触发表的 `tableId`，`recordId` 填对应多维表格记录 ID。

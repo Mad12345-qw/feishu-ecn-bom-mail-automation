@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
 import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
-import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
+import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -115,6 +115,17 @@ async function handleTestMail(req, res, url) {
   });
   appendLog({ type: "test_mail", to: config.testRecipients, result });
   return sendJson(res, 200, { status: "sent", to: config.testRecipients, result });
+}
+
+async function handleSendBitableRecord(req, res, url) {
+  if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
+
+  const result = await sendConfiguredBitableRecord({
+    sourceName: url.searchParams.get("source") || "",
+    recordId: url.searchParams.get("recordId") || ""
+  });
+  appendLog({ type: "debug_send_bitable_record", result });
+  return sendJson(res, 200, result);
 }
 
 function handleUserTokenEnvExport(req, res, url) {
@@ -235,6 +246,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-test-mail") {
       return await handleTestMail(req, res, url);
+    }
+
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-bitable-record") {
+      return await handleSendBitableRecord(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname === "/debug/user-token-env") {

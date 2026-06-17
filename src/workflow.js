@@ -323,6 +323,53 @@ export async function syncConfiguredBitableRecords() {
   };
 }
 
+export async function sendConfiguredBitableRecord({ sourceName = "", recordId = "" } = {}) {
+  if (!recordId) {
+    return { status: "blocked", reason: "Missing recordId" };
+  }
+
+  const source = config.bitable.sources.find((item) => {
+    return item.name === sourceName || item.tableId === sourceName || (!sourceName && isTriggerSource(item));
+  });
+  if (!source) {
+    return { status: "blocked", reason: "未找到指定BOM触发表" };
+  }
+  if (!isTriggerSource(source)) {
+    return { status: "blocked", reason: `${source.name} 不是邮件触发表`, source: describeBitableSource(source) };
+  }
+
+  const [item, lookupRecords] = await Promise.all([
+    getBitableRecord(source, recordId),
+    listConfiguredLookupRecords()
+  ]);
+  const fields = item.fields || {};
+  const enrichedFields = enrichTriggerRecord(fields, lookupRecords);
+  const result = await processBusinessRecord(enrichedFields, {
+    readinessRecord: fields,
+    routeRecord: fields
+  });
+
+  return {
+    status: "processed",
+    source: describeBitableSource(source),
+    recordId,
+    result
+  };
+}
+
+async function listConfiguredLookupRecords() {
+  const lookupRecords = [];
+  for (const source of config.bitable.sources.filter(isLookupSource)) {
+    const items = await listBitableRecords(source);
+    lookupRecords.push(...items.map((item) => ({
+      source,
+      recordId: item.record_id || item.id || "",
+      fields: item.fields || {}
+    })));
+  }
+  return lookupRecords;
+}
+
 async function listBitableRecords(source) {
   const items = [];
   let pageToken = "";
@@ -350,10 +397,14 @@ async function hydrateBitableRecord(source, item) {
   const recordId = item?.record_id || item?.id || "";
   if (!recordId) return item;
 
+  return getBitableRecord(source, recordId);
+}
+
+async function getBitableRecord(source, recordId) {
   const data = await feishuApi(
     `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records/${encodeURIComponent(recordId)}`
   );
-  return data.data?.record || item;
+  return data.data?.record || {};
 }
 
 async function syncBitableSource(source, items, lookupRecords) {
