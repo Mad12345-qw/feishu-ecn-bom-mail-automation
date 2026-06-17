@@ -4,6 +4,7 @@ import { downloadFeishuMedia, feishuApi, sendFeishuChatText, sendFeishuMail } fr
 
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
+const recordStatusByKey = new Map();
 
 function getField(source, key) {
   const configured = config.fieldMapping[key] || key;
@@ -67,15 +68,8 @@ export function routeByAssemblyFactory(record) {
 }
 
 export function buildRecipientRoute(record) {
-  const factoryRoute = config.includeFactoryRecipients
-    ? routeByAssemblyFactory(record)
-    : {
-        ok: true,
-        assemblyFactory: valueToText(getField(record, "assemblyFactory")),
-        to: [],
-        cc: []
-      };
-  if (config.includeFactoryRecipients && !factoryRoute.ok) return factoryRoute;
+  const factoryRoute = routeByAssemblyFactory(record);
+  if (!factoryRoute.ok) return factoryRoute;
 
   const dynamicRecipients = normalizeEmailList([
     ...extractEmails(getField(record, "initiator")),
@@ -97,7 +91,7 @@ export function buildRecipientRoute(record) {
     fixedRecipients,
     dynamicRecipients,
     factoryRecipients,
-    factoryRecipientsEnabled: config.includeFactoryRecipients
+    factoryRecipientsEnabled: true
   };
 }
 
@@ -148,6 +142,11 @@ export function buildMailHtml(record) {
 export async function processBusinessRecord(record) {
   if (!record || !Object.keys(record).length) {
     return { status: "received_no_business_fields", reason: "事件已接收，但暂未解析到业务字段" };
+  }
+
+  const readiness = getRecordReadiness(record);
+  if (!readiness.ok) {
+    return { status: "skipped_not_ready", reason: readiness.reason, approvalStatus: readiness.statusText };
   }
 
   const route = buildRecipientRoute(record);
@@ -265,12 +264,15 @@ async function syncBitableSource(source) {
   for (const item of items) {
     const fields = item.fields || {};
     const recordId = item.record_id || item.id || "";
+    const recordKey = `${sourceId}:${recordId}`;
 
     if (!Object.keys(fields).length) {
       results.push({ recordId, status: "skipped_empty" });
       continue;
     }
 
+    const readiness = getRecordReadiness(fields);
+    const previousStatus = recordStatusByKey.get(recordKey) || "";
     const fingerprint = createRecordFingerprint(sourceId, recordId, fields);
     if (processedRecordFingerprints.has(fingerprint)) {
       results.push({ recordId, status: "skipped_duplicate" });
@@ -279,12 +281,22 @@ async function syncBitableSource(source) {
 
     processedRecordFingerprints.add(fingerprint);
     if (config.bitable.skipExistingOnStart && !bootstrappedBitableSources.has(sourceId)) {
+      recordStatusByKey.set(recordKey, readiness.statusText);
       results.push({ recordId, status: "skipped_baseline" });
+      continue;
+    }
+
+    if (readiness.ok && isReadyStatus(previousStatus)) {
+      recordStatusByKey.set(recordKey, readiness.statusText);
+      results.push({ recordId, status: "skipped_already_ready", approvalStatus: readiness.statusText });
       continue;
     }
 
     try {
       const result = await processBusinessRecord(fields);
+      if (result.status !== "blocked") {
+        recordStatusByKey.set(recordKey, readiness.statusText);
+      }
       results.push({ recordId, result });
     } catch (error) {
       results.push({ recordId, status: "failed", error: error.message });
@@ -506,6 +518,23 @@ function normalizeFactoryNames(value) {
     .split(/[、,，;；\n\r]/)
     .map((item) => item.trim())
     .filter(Boolean))];
+}
+
+function getRecordReadiness(record) {
+  const statusText = valueToText(getField(record, "approvalStatus")).trim();
+  if (!statusText) {
+    return { ok: false, statusText, reason: "缺少审批/完成状态字段" };
+  }
+  if (!isReadyStatus(statusText)) {
+    return { ok: false, statusText, reason: `状态未完成：${statusText}` };
+  }
+  return { ok: true, statusText };
+}
+
+function isReadyStatus(statusText) {
+  const text = String(statusText || "").trim();
+  if (!text) return false;
+  return config.readyStatusValues.some((status) => text === status || text.includes(status));
 }
 
 function valueToText(value) {

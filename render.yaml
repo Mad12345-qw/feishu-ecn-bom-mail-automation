@@ -15,7 +15,9 @@ services:
       - key: EMAIL_DRY_RUN
         value: "true"
       - key: INCLUDE_FACTORY_RECIPIENTS
-        value: "false"
+        value: "true"
+      - key: READY_STATUS_VALUES
+        value: 已通过,审批通过,完成,已完成,已发布
       - key: FEISHU_APP_ID
         sync: false
       - key: FEISHU_APP_SECRET

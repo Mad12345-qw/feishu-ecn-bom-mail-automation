@@ -10,9 +10,9 @@
 - ECN/BOM 邮件正文模板
 - 组装厂到收件邮箱的路由表
 - 固定收件人 + 发起人/项目经理 + 组装厂多选收件人的合并去重
-- 支持临时关闭组装厂收件人，只发固定收件人和动态人员邮箱
 - 邮件发送后同步一条通知到指定飞书群
 - 支持配置多张飞书多维表格作为同步来源
+- 仅在记录状态达到完成/审批通过，并成功匹配组装厂收件地址后发送
 - 安全试运行模式，只允许发送到指定测试邮箱
 - 发送事件日志：`logs/events.jsonl`
 
@@ -82,6 +82,7 @@ FEISHU_SYNC_CHAT_ID
 FIXED_RECIPIENTS
 TEST_RECIPIENTS
 INCLUDE_FACTORY_RECIPIENTS
+READY_STATUS_VALUES
 BITABLE_SOURCES
 ```
 
@@ -103,7 +104,8 @@ BITABLE_SKIP_EXISTING_ON_START=true
 
 ```text
 SAFE_TEST_MODE=true
-INCLUDE_FACTORY_RECIPIENTS=false
+INCLUDE_FACTORY_RECIPIENTS=true
+READY_STATUS_VALUES=已通过,审批通过,完成,已完成,已发布
 ```
 
-飞书群同步需要客户自建应用具备“发送消息”相关权限，并且应用机器人已加入目标群。固定收件人用英文逗号配置在 `FIXED_RECIPIENTS`，发起人和项目经理邮箱从多维表字段中自动提取。
+飞书群同步需要客户自建应用具备“发送消息”相关权限，并且应用机器人已加入目标群。固定收件人用英文逗号配置在 `FIXED_RECIPIENTS`，发起人和项目经理邮箱从多维表字段中自动提取。正式发送前必须能识别组装厂字段并匹配到组装厂地址表；否则系统会暂停发送。

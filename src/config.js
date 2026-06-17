@@ -34,6 +34,14 @@ function parseCsvList(value) {
     .filter(Boolean);
 }
 
+function parseTextList(value, fallback = []) {
+  const items = String(value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return items.length ? items : fallback;
+}
+
 function parseBoolean(value, fallback) {
   if (value === undefined || value === null || value === "") return fallback;
   return String(value).toLowerCase() !== "false";
@@ -81,7 +89,8 @@ export const config = {
   },
   safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
   emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),
-  includeFactoryRecipients: parseBoolean(process.env.INCLUDE_FACTORY_RECIPIENTS, false),
+  includeFactoryRecipients: parseBoolean(process.env.INCLUDE_FACTORY_RECIPIENTS, true),
+  readyStatusValues: parseTextList(process.env.READY_STATUS_VALUES, ["已通过", "审批通过", "完成", "已完成", "已发布"]),
   fixedRecipients: parseCsvList(process.env.FIXED_RECIPIENTS),
   testRecipients: parseCsvList(process.env.TEST_RECIPIENTS),
   assemblyFactories: readJson("config/assembly-factories.json", {}),
