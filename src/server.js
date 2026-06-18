@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
 import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
-import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
+import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, sendConfiguredApprovalInstance, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -126,6 +126,17 @@ async function handleSendBitableRecord(req, res, url) {
     force: url.searchParams.get("force") === "true"
   });
   appendLog({ type: "debug_send_bitable_record", result });
+  return sendJson(res, 200, result);
+}
+
+async function handleSendApprovalInstance(req, res, url) {
+  if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
+
+  const result = await sendConfiguredApprovalInstance({
+    instanceCode: url.searchParams.get("instanceCode") || "",
+    force: url.searchParams.get("force") === "true"
+  });
+  appendLog({ type: "debug_send_approval_instance", result });
   return sendJson(res, 200, result);
 }
 
@@ -252,6 +263,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-bitable-record") {
       return await handleSendBitableRecord(req, res, url);
+    }
+
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-approval-instance") {
+      return await handleSendApprovalInstance(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname === "/debug/user-token-env") {

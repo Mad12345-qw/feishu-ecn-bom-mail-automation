@@ -380,6 +380,61 @@ export async function sendConfiguredBitableRecord({ sourceName = "", recordId = 
   };
 }
 
+export async function sendConfiguredApprovalInstance({ instanceCode = "", force = false } = {}) {
+  if (!instanceCode) {
+    return { status: "blocked", reason: "Missing instanceCode" };
+  }
+
+  const [approvalRecord, lookupRecords] = await Promise.all([
+    fetchApprovalInstanceRecord(instanceCode),
+    listConfiguredLookupRecords()
+  ]);
+  const recordKey = `approval:${approvalRecord.approvalCode || ""}:${approvalRecord.instanceCode}`;
+  const fingerprint = createRecordFingerprint("approval", approvalRecord.instanceCode, approvalRecord.fields);
+
+  if (!force) {
+    const persistentState = await readPersistentRecordState(recordKey);
+    if (persistentState?.status === "sent") {
+      return {
+        status: "skipped_persisted_sent",
+        source: {
+          name: approvalRecord.approvalName,
+          instanceCode: approvalRecord.instanceCode,
+          serialNumber: approvalRecord.serialNumber,
+          role: "approval_trigger"
+        },
+        fingerprintChanged: persistentState.fingerprint !== fingerprint
+      };
+    }
+  }
+
+  const enrichedFields = await enrichTriggerRecord(approvalRecord.fields, lookupRecords);
+  const result = await processBusinessRecord(enrichedFields, {
+    readinessRecord: approvalRecord.fields,
+    routeRecord: approvalRecord.fields
+  });
+  if (result.status === "sent") {
+    await writePersistentRecordState(recordKey, {
+      fingerprint,
+      status: "sent",
+      statusText: getRecordReadiness(approvalRecord.fields).statusText,
+      sentAt: new Date().toISOString(),
+      sentBy: force ? "approval_manual_force" : "approval_manual"
+    });
+  }
+
+  return {
+    status: "processed",
+    source: {
+      name: approvalRecord.approvalName,
+      instanceCode: approvalRecord.instanceCode,
+      serialNumber: approvalRecord.serialNumber,
+      role: "approval_trigger"
+    },
+    result
+  };
+}
+
 async function listConfiguredLookupRecords() {
   const lookupRecords = [];
   for (const source of config.bitable.sources.filter(isLookupSource)) {
@@ -588,15 +643,49 @@ function hasFieldValue(value) {
 }
 
 async function fetchApprovalFormFields(instanceCode) {
+  const record = await fetchApprovalInstanceRecord(instanceCode);
+  return record.fields;
+}
+
+async function fetchApprovalInstanceRecord(instanceCode) {
   const data = await feishuApi(`/approval/v4/instances/${encodeURIComponent(instanceCode)}`);
-  return approvalFormToFields(parseApprovalForm(data.data?.form));
+  const instance = data.data || {};
+  const statusText = approvalStatusToReadyText(instance.status);
+  const fields = {
+    ...approvalFormToFields(parseApprovalForm(instance.form)),
+    SourceID: instance.instance_code || instanceCode,
+    "申请状态": statusText,
+    "申请编号": instance.serial_number || "",
+    "发起时间": instance.start_time || "",
+    "完成时间": instance.end_time || "",
+    "审批流程": instance.approval_name || ""
+  };
+
+  return {
+    approvalCode: instance.approval_code || "",
+    approvalName: instance.approval_name || "",
+    instanceCode: instance.instance_code || instanceCode,
+    serialNumber: instance.serial_number || "",
+    fields
+  };
+}
+
+function approvalStatusToReadyText(status) {
+  const text = String(status || "").toUpperCase();
+  if (text === "APPROVED") return "已通过";
+  if (text === "REJECTED") return "已拒绝";
+  if (text === "CANCELED" || text === "CANCELLED") return "已撤回";
+  return status || "";
 }
 
 function approvalFormToFields(formItems) {
   const fields = {};
   for (const item of formItems) {
     if (!item?.name || item.type === "text") continue;
-    if (item.type === "attachmentV2") continue;
+    if (item.type === "attachmentV2") {
+      fields[item.name] = getApprovalAttachmentValue(item);
+      continue;
+    }
     if (item.type === "fieldList") {
       fields[item.name] = parseApprovalFieldListRows(item.value);
       continue;
@@ -621,8 +710,18 @@ function parseApprovalFieldListRows(value) {
 }
 
 function getApprovalItemValue(item) {
+  if (item?.type === "connect" && item?.ext?.serialIDs) return item.ext.serialIDs;
   if (item?.option?.text) return item.option.text;
   return item?.value ?? "";
+}
+
+function getApprovalAttachmentValue(item) {
+  const urls = Array.isArray(item.value) ? item.value : [item.value].filter(Boolean);
+  const names = getApprovalAttachmentNames(item, urls.length);
+  return urls.map((url, index) => ({
+    url,
+    name: names[index] || item.name || "attachment"
+  }));
 }
 
 function omitBomOwnedFields(fields) {
@@ -1240,6 +1339,15 @@ function createAttachmentRefsFromUrl(rawUrl, fallbackName = "attachment", contex
     }];
   }
 
+  if (url.hostname.includes("internal-api-drive-stream.feishu.cn")
+    && url.pathname.includes("/space/api/box/stream/download/authcode/")) {
+    return [{
+      type: "direct_download",
+      name: normalizeAttachmentFilename(fallbackName, "bin"),
+      url: rawUrl
+    }];
+  }
+
   return [];
 }
 
@@ -1300,6 +1408,12 @@ async function downloadMailAttachments(attachmentRefs) {
   };
 
   for (const ref of attachmentRefs) {
+    if (ref.type === "direct_download") {
+      if (downloadedRefs.has(ref.url)) continue;
+      downloadedRefs.add(ref.url);
+      pushAttachment(await downloadDirectUrlAttachment(ref.url, ref.name));
+      continue;
+    }
     if (ref.type === "approval_preview") {
       const approvalRefs = await resolveApprovalPreviewAttachmentRefs(ref);
       for (const approvalRef of approvalRefs) {
