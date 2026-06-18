@@ -6,6 +6,7 @@ const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
 const recordStatusByKey = new Map();
 const approvalFormFieldCache = new Map();
+const serviceStartedAt = Date.now();
 
 function getField(source, key) {
   const configured = config.fieldMapping[key] || key;
@@ -422,10 +423,13 @@ async function syncBitableSource(source, items, lookupRecords) {
     }
 
     if (config.bitable.skipExistingOnStart && !bootstrappedBitableSources.has(sourceId)) {
-      processedRecordFingerprints.add(fingerprint);
-      recordStatusByKey.set(recordKey, readiness.statusText);
-      results.push({ recordId, status: "skipped_baseline" });
-      continue;
+      const recentReady = isRecentReadyDuringBootstrap(fields, readiness);
+      if (!recentReady) {
+        processedRecordFingerprints.add(fingerprint);
+        recordStatusByKey.set(recordKey, readiness.statusText);
+        results.push({ recordId, status: "skipped_baseline" });
+        continue;
+      }
     }
 
     if (readiness.ok && isReadyStatus(previousStatus)) {
@@ -1300,6 +1304,32 @@ function getRecordReadiness(record) {
     return { ok: false, statusText, reason: `状态未完成：${statusText}` };
   }
   return { ok: true, statusText };
+}
+
+function isRecentReadyDuringBootstrap(record, readiness) {
+  if (!readiness.ok) return false;
+
+  const timestamp = getRecordBusinessTimestamp(record);
+  if (!timestamp) return false;
+
+  const windowMs = Math.max(0, config.bitable.bootstrapRecentReadyWindowMinutes) * 60 * 1000;
+  return timestamp >= serviceStartedAt - windowMs;
+}
+
+function getRecordBusinessTimestamp(record) {
+  const candidates = [
+    record["完成时间"],
+    record["更新时间"],
+    record["最后更新时间"],
+    record["发起时间"],
+    record["创建时间"]
+  ];
+
+  for (const value of candidates) {
+    const timestamp = Number(valueToText(value));
+    if (Number.isFinite(timestamp) && timestamp > 0) return timestamp;
+  }
+  return 0;
 }
 
 function isReadyStatus(statusText) {

@@ -47,6 +47,11 @@ function parseBoolean(value, fallback) {
   return String(value).toLowerCase() !== "false";
 }
 
+function parseNumber(value, fallback) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function parseBitableSources() {
   const rawSources = String(process.env.BITABLE_SOURCES || "").trim();
   if (rawSources) {
@@ -91,6 +96,7 @@ export const config = {
     tableId: process.env.BITABLE_TABLE_ID || "",
     sources: parseBitableSources(),
     skipExistingOnStart: parseBoolean(process.env.BITABLE_SKIP_EXISTING_ON_START, false),
+    bootstrapRecentReadyWindowMinutes: parseNumber(process.env.BITABLE_BOOTSTRAP_RECENT_READY_WINDOW_MINUTES, 120),
     triggerSourceNames: parseTextList(process.env.BITABLE_TRIGGER_SOURCE_NAMES, ["正式表1", "BOM", "BOM释放", "BOM释放表"]),
     lookupSourceNames: parseTextList(process.env.BITABLE_LOOKUP_SOURCE_NAMES, ["正式表2", "ECN", "ECN表", "ECN变更通知"])
   },
