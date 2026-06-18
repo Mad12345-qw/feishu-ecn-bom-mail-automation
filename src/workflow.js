@@ -317,7 +317,7 @@ export async function syncConfiguredBitableRecords() {
   };
 }
 
-export async function sendConfiguredBitableRecord({ sourceName = "", recordId = "" } = {}) {
+export async function sendConfiguredBitableRecord({ sourceName = "", recordId = "", force = false } = {}) {
   if (!recordId) {
     return { status: "blocked", reason: "Missing recordId" };
   }
@@ -337,11 +337,37 @@ export async function sendConfiguredBitableRecord({ sourceName = "", recordId = 
     listConfiguredLookupRecords()
   ]);
   const fields = item.fields || {};
+  const sourceId = getBitableSourceId(source);
+  const recordKey = `${sourceId}:${recordId}`;
+  const fingerprint = createRecordFingerprint(sourceId, recordId, fields);
+
+  if (!force) {
+    const persistentState = await readPersistentRecordState(recordKey);
+    if (persistentState?.status === "sent") {
+      return {
+        status: "skipped_persisted_sent",
+        source: describeBitableSource(source),
+        recordId,
+        approvalStatus: getRecordReadiness(fields).statusText,
+        fingerprintChanged: persistentState.fingerprint !== fingerprint
+      };
+    }
+  }
+
   const enrichedFields = await enrichTriggerRecord(fields, lookupRecords);
   const result = await processBusinessRecord(enrichedFields, {
     readinessRecord: fields,
     routeRecord: fields
   });
+  if (result.status === "sent") {
+    await writePersistentRecordState(recordKey, {
+      fingerprint,
+      status: "sent",
+      statusText: getRecordReadiness(fields).statusText,
+      sentAt: new Date().toISOString(),
+      sentBy: force ? "manual_force" : "manual"
+    });
+  }
 
   return {
     status: "processed",
@@ -441,10 +467,15 @@ async function syncBitableSource(source, items, lookupRecords) {
 
     try {
       const persistentState = await readPersistentRecordState(recordKey);
-      if (persistentState?.fingerprint === fingerprint && persistentState.status === "sent") {
+      if (persistentState?.status === "sent") {
         processedRecordFingerprints.add(fingerprint);
         recordStatusByKey.set(recordKey, readiness.statusText);
-        results.push({ recordId, status: "skipped_persisted_sent", approvalStatus: readiness.statusText });
+        results.push({
+          recordId,
+          status: "skipped_persisted_sent",
+          approvalStatus: readiness.statusText,
+          fingerprintChanged: persistentState.fingerprint !== fingerprint
+        });
         continue;
       }
 

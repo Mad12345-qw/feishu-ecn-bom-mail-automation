@@ -135,10 +135,16 @@ READY_STATUS_VALUES=已通过,审批通过,完成,已完成,已发布
 INCLUDE_FACTORY_RECIPIENTS=true
 ```
 
-历史漏发记录不要用全表同步补发，使用单条补发入口：
+历史漏发记录不要用全表同步补发，使用单条记录检查/补发入口。默认情况下，如果该记录已成功发送过，接口会跳过，不会重复发信：
 
 ```text
 https://你的-render-service.onrender.com/debug/send-bitable-record?token=你的VerificationToken&source=触发表tableId&recordId=记录ID
 ```
 
 例如 `source` 可填写 BOM 触发表的 `tableId`，`recordId` 填对应多维表格记录 ID。
+
+只有确认需要人工强制补发时，才追加：
+
+```text
+&force=true
+```

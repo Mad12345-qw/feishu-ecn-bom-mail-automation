@@ -122,7 +122,8 @@ async function handleSendBitableRecord(req, res, url) {
 
   const result = await sendConfiguredBitableRecord({
     sourceName: url.searchParams.get("source") || "",
-    recordId: url.searchParams.get("recordId") || ""
+    recordId: url.searchParams.get("recordId") || "",
+    force: url.searchParams.get("force") === "true"
   });
   appendLog({ type: "debug_send_bitable_record", result });
   return sendJson(res, 200, result);
