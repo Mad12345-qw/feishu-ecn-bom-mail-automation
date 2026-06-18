@@ -32,6 +32,12 @@ services:
         sync: false
       - key: FEISHU_SYNC_CHAT_ID
         sync: false
+      - key: UPSTASH_REDIS_REST_URL
+        sync: false
+      - key: UPSTASH_REDIS_REST_TOKEN
+        sync: false
+      - key: UPSTASH_FEISHU_USER_TOKEN_KEY
+        value: feishu:user-token
       - key: FIXED_RECIPIENTS
         sync: false
       - key: TEST_RECIPIENTS

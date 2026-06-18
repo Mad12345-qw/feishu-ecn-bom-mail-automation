@@ -10,6 +10,7 @@ const USER_TOKEN_ENV_KEY = "FEISHU_USER_TOKEN_B64";
 
 let cachedTenantToken = null;
 let cachedTenantTokenExpiresAt = 0;
+let cachedUserToken = null;
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -197,7 +198,7 @@ export async function exchangeOAuthCode({ code, redirectUri }) {
     })
   });
 
-  return saveUserToken(data.data || data);
+  return await saveUserToken(data.data || data);
 }
 
 export async function refreshUserAccessToken(refreshToken) {
@@ -211,11 +212,11 @@ export async function refreshUserAccessToken(refreshToken) {
     })
   });
 
-  return saveUserToken(data.data || data);
+  return await saveUserToken(data.data || data);
 }
 
 export async function getUserAccessToken() {
-  const stored = readUserToken();
+  const stored = await readUserToken();
   if (!stored?.access_token && !stored?.refresh_token) {
     throw new Error("Missing Feishu user authorization. Open /oauth/feishu/start first.");
   }
@@ -232,18 +233,28 @@ export async function getUserAccessToken() {
   return refreshed.access_token;
 }
 
-export function getUserAuthStatus() {
-  const stored = readUserToken();
+export async function getUserAuthStatus() {
+  let stored = null;
+  let readError = "";
+  try {
+    stored = await readUserToken();
+  } catch (error) {
+    readError = error.message;
+  }
+
   return {
     authorized: Boolean(stored?.access_token || stored?.refresh_token),
     hasRefreshToken: Boolean(stored?.refresh_token),
     accessTokenValid: Boolean(stored?.access_token && stored.access_token_expires_at > Date.now() + 60_000),
-    refreshTokenValid: Boolean(stored?.refresh_token && stored.refresh_token_expires_at > Date.now() + 60_000)
+    refreshTokenValid: Boolean(stored?.refresh_token && stored.refresh_token_expires_at > Date.now() + 60_000),
+    persistentStoreConfigured: isUpstashConfigured(),
+    persistentStore: isUpstashConfigured() ? "upstash" : "local",
+    ...(readError ? { readError } : {})
   };
 }
 
-export function exportUserTokenForRenderEnv() {
-  const stored = readUserToken();
+export async function exportUserTokenForRenderEnv() {
+  const stored = await readUserToken();
   if (!stored?.access_token && !stored?.refresh_token) {
     return {
       ok: false,
@@ -255,7 +266,7 @@ export function exportUserTokenForRenderEnv() {
     ok: true,
     envKey: USER_TOKEN_ENV_KEY,
     envValue: Buffer.from(JSON.stringify(stored), "utf8").toString("base64url"),
-    status: getUserAuthStatus()
+    status: await getUserAuthStatus()
   };
 }
 
@@ -306,7 +317,11 @@ export async function sendFeishuChatText({ chatId, text }) {
   });
 }
 
-function saveUserToken(data) {
+function isUpstashConfigured() {
+  return Boolean(config.upstash.redisRestUrl && config.upstash.redisRestToken);
+}
+
+async function saveUserToken(data) {
   const now = Date.now();
   const token = {
     access_token: data.access_token,
@@ -316,15 +331,28 @@ function saveUserToken(data) {
     updated_at: new Date(now).toISOString()
   };
 
-  fs.mkdirSync(path.dirname(USER_TOKEN_PATH), { recursive: true });
-  fs.writeFileSync(USER_TOKEN_PATH, JSON.stringify(token, null, 2), "utf8");
+  if (isUpstashConfigured()) {
+    await writeUserTokenToUpstash(token);
+  }
+
+  cachedUserToken = token;
+  writeUserTokenToLocalFile(token);
   return token;
 }
 
-function readUserToken() {
+async function readUserToken() {
+  if (cachedUserToken) return cachedUserToken;
+
+  const upstashToken = await readUserTokenFromUpstash();
+  if (upstashToken) {
+    cachedUserToken = upstashToken;
+    return upstashToken;
+  }
+
   if (fs.existsSync(USER_TOKEN_PATH)) {
     try {
-      return JSON.parse(fs.readFileSync(USER_TOKEN_PATH, "utf8"));
+      cachedUserToken = JSON.parse(fs.readFileSync(USER_TOKEN_PATH, "utf8"));
+      return cachedUserToken;
     } catch {
       return readUserTokenFromEnv();
     }
@@ -332,11 +360,66 @@ function readUserToken() {
   return readUserTokenFromEnv();
 }
 
+async function readUserTokenFromUpstash() {
+  if (!isUpstashConfigured()) return null;
+
+  const data = await upstashRequest(`/get/${encodeURIComponent(config.upstash.userTokenKey)}`);
+  if (data.result === null || data.result === undefined || data.result === "") return null;
+
+  if (typeof data.result === "object") return data.result;
+
+  try {
+    return JSON.parse(String(data.result));
+  } catch (error) {
+    throw new Error(`Upstash user token is not valid JSON: ${error.message}`);
+  }
+}
+
+async function writeUserTokenToUpstash(token) {
+  await upstashRequest(`/set/${encodeURIComponent(config.upstash.userTokenKey)}`, {
+    method: "POST",
+    body: JSON.stringify(token)
+  });
+}
+
+async function upstashRequest(pathname, options = {}) {
+  const baseUrl = config.upstash.redisRestUrl.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}${pathname}`, {
+    ...options,
+    headers: {
+      authorization: `Bearer ${config.upstash.redisRestToken}`,
+      "content-type": "text/plain; charset=utf-8",
+      ...(options.headers || {})
+    }
+  });
+
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok || data.error) {
+    const message = data.error || data.message || response.statusText;
+    throw new Error(`Upstash Redis failed: ${message}`);
+  }
+
+  return data;
+}
+
+function writeUserTokenToLocalFile(token) {
+  fs.mkdirSync(path.dirname(USER_TOKEN_PATH), { recursive: true });
+  fs.writeFileSync(USER_TOKEN_PATH, JSON.stringify(token, null, 2), "utf8");
+}
+
 function readUserTokenFromEnv() {
   const encoded = process.env[USER_TOKEN_ENV_KEY];
   if (encoded) {
     try {
-      return JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+      cachedUserToken = JSON.parse(Buffer.from(encoded, "base64url").toString("utf8"));
+      return cachedUserToken;
     } catch {
       return null;
     }
@@ -345,7 +428,8 @@ function readUserTokenFromEnv() {
   const rawJson = process.env.FEISHU_USER_TOKEN_JSON;
   if (rawJson) {
     try {
-      return JSON.parse(rawJson);
+      cachedUserToken = JSON.parse(rawJson);
+      return cachedUserToken;
     } catch {
       return null;
     }

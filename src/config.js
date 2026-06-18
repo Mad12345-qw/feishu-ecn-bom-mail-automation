@@ -81,6 +81,11 @@ export const config = {
     senderDisplayName: process.env.FEISHU_SENDER_DISPLAY_NAME || "BOM释放通知",
     syncChatId: process.env.FEISHU_SYNC_CHAT_ID || ""
   },
+  upstash: {
+    redisRestUrl: process.env.UPSTASH_REDIS_REST_URL || "",
+    redisRestToken: process.env.UPSTASH_REDIS_REST_TOKEN || "",
+    userTokenKey: process.env.UPSTASH_FEISHU_USER_TOKEN_KEY || "feishu:user-token"
+  },
   bitable: {
     appToken: process.env.BITABLE_APP_TOKEN || "",
     tableId: process.env.BITABLE_TABLE_ID || "",

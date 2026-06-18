@@ -128,10 +128,10 @@ async function handleSendBitableRecord(req, res, url) {
   return sendJson(res, 200, result);
 }
 
-function handleUserTokenEnvExport(req, res, url) {
+async function handleUserTokenEnvExport(req, res, url) {
   if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
 
-  const result = exportUserTokenForRenderEnv();
+  const result = await exportUserTokenForRenderEnv();
   appendLog({
     type: "oauth_token_env_export",
     ok: result.ok,
@@ -220,7 +220,7 @@ const server = http.createServer(async (req, res) => {
         fixedRecipientCount: config.fixedRecipients.length,
         includeFactoryRecipients: config.includeFactoryRecipients,
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
-        userMailAuth: getUserAuthStatus()
+        userMailAuth: await getUserAuthStatus()
       });
     }
 
@@ -253,7 +253,7 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (req.method === "GET" && url.pathname === "/debug/user-token-env") {
-      return handleUserTokenEnvExport(req, res, url);
+      return await handleUserTokenEnvExport(req, res, url);
     }
 
     if (req.method === "GET" && url.pathname === "/oauth/feishu/start") {
