@@ -96,7 +96,7 @@ export const config = {
     tableId: process.env.BITABLE_TABLE_ID || "",
     sources: parseBitableSources(),
     skipExistingOnStart: parseBoolean(process.env.BITABLE_SKIP_EXISTING_ON_START, false),
-    bootstrapRecentReadyWindowMinutes: parseNumber(process.env.BITABLE_BOOTSTRAP_RECENT_READY_WINDOW_MINUTES, 120),
+    bootstrapRecentReadyWindowMinutes: parseNumber(process.env.BITABLE_BOOTSTRAP_RECENT_READY_WINDOW_MINUTES, 30),
     triggerSourceNames: parseTextList(process.env.BITABLE_TRIGGER_SOURCE_NAMES, ["正式表1", "BOM", "BOM释放", "BOM释放表"]),
     lookupSourceNames: parseTextList(process.env.BITABLE_LOOKUP_SOURCE_NAMES, ["正式表2", "ECN", "ECN表", "ECN变更通知"])
   },
