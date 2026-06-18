@@ -5,6 +5,7 @@ import { downloadDirectUrlAttachment, downloadFeishuMediaWithUserFallback, expor
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
 const recordStatusByKey = new Map();
+const approvalFormFieldCache = new Map();
 
 function getField(source, key) {
   const configured = config.fieldMapping[key] || key;
@@ -123,7 +124,7 @@ export function buildRecipientRoute(record) {
 }
 
 export function buildMailHtml(record) {
-  const changeDescription = getChangeDescriptionParts(record);
+  const changeDescriptionRows = getChangeDescriptionRows(record);
   const bomRows = [
     ["项目名称及项目编号", getField(record, "projectNameOrCode")],
     ["版本号", getField(record, "version")],
@@ -142,14 +143,6 @@ export function buildMailHtml(record) {
     ["变更原因", getField(record, "changeReason")],
     ["变更实施日期", getField(record, "changeImplementationDate")]
   ];
-  const changeDescriptionColumns = [
-    ["变更前", changeDescription.before],
-    ["变更前补充描述", changeDescription.beforeSupplement],
-    ["变更后", changeDescription.after],
-    ["变更后补充描述", changeDescription.afterSupplement],
-    ["执行方式", changeDescription.executionMode]
-  ];
-
   return `<!doctype html>
 <html>
 <body>
@@ -159,7 +152,7 @@ export function buildMailHtml(record) {
 
     ${buildSectionTable("BOM释放详情", bomRows)}
     ${buildSectionTable("关联ECN变更通知单详情", ecnRows)}
-    ${buildChangeDescriptionTable(changeDescriptionColumns)}
+    ${buildChangeDescriptionTable(changeDescriptionRows)}
 
     <p style="color:#666;font-size:12px;margin-top:16px;">该邮件由系统自动发送，附件或链接仅供下载查看，不会开放飞书源文件编辑权限。</p>
   </div>
@@ -343,7 +336,7 @@ export async function sendConfiguredBitableRecord({ sourceName = "", recordId = 
     listConfiguredLookupRecords()
   ]);
   const fields = item.fields || {};
-  const enrichedFields = enrichTriggerRecord(fields, lookupRecords);
+  const enrichedFields = await enrichTriggerRecord(fields, lookupRecords);
   const result = await processBusinessRecord(enrichedFields, {
     readinessRecord: fields,
     routeRecord: fields
@@ -412,7 +405,7 @@ async function syncBitableSource(source, items, lookupRecords) {
   const results = [];
   for (const item of items) {
     const fields = item.fields || {};
-    const enrichedFields = enrichTriggerRecord(fields, lookupRecords);
+    const enrichedFields = await enrichTriggerRecord(fields, lookupRecords);
     const recordId = item.record_id || item.id || "";
     const recordKey = `${sourceId}:${recordId}`;
 
@@ -488,15 +481,16 @@ function isLookupSource(source) {
   return config.bitable.lookupSourceNames.includes(source.name) || !isTriggerSource(source);
 }
 
-function enrichTriggerRecord(triggerFields, lookupRecords) {
+async function enrichTriggerRecord(triggerFields, lookupRecords) {
   const relatedRecords = findRelatedLookupRecords(triggerFields, lookupRecords);
   if (!relatedRecords.length) return triggerFields;
 
   const merged = {};
   const lookupSourceIds = [];
   for (const related of relatedRecords) {
-    if (related.fields?.SourceID) lookupSourceIds.push(related.fields.SourceID);
-    Object.assign(merged, omitBomOwnedFields(related.fields));
+    const relatedFields = await enrichFieldsFromApprovalForm(related.fields);
+    if (relatedFields?.SourceID) lookupSourceIds.push(relatedFields.SourceID);
+    Object.assign(merged, omitBomOwnedFields(relatedFields));
   }
 
   return {
@@ -504,6 +498,63 @@ function enrichTriggerRecord(triggerFields, lookupRecords) {
     __lookupSourceIDs: lookupSourceIds,
     ...triggerFields
   };
+}
+
+async function enrichFieldsFromApprovalForm(fields) {
+  const instanceCode = extractApprovalInstanceCodeFromSourceId(fields?.SourceID || "");
+  if (!instanceCode) return fields;
+
+  if (!approvalFormFieldCache.has(instanceCode)) {
+    approvalFormFieldCache.set(instanceCode, fetchApprovalFormFields(instanceCode));
+  }
+
+  try {
+    const formFields = await approvalFormFieldCache.get(instanceCode);
+    return {
+      ...fields,
+      ...formFields
+    };
+  } catch {
+    return fields;
+  }
+}
+
+async function fetchApprovalFormFields(instanceCode) {
+  const data = await feishuApi(`/approval/v4/instances/${encodeURIComponent(instanceCode)}`);
+  return approvalFormToFields(parseApprovalForm(data.data?.form));
+}
+
+function approvalFormToFields(formItems) {
+  const fields = {};
+  for (const item of formItems) {
+    if (!item?.name || item.type === "text") continue;
+    if (item.type === "attachmentV2") continue;
+    if (item.type === "fieldList") {
+      fields[item.name] = parseApprovalFieldListRows(item.value);
+      continue;
+    }
+    fields[item.name] = getApprovalItemValue(item);
+  }
+  return fields;
+}
+
+function parseApprovalFieldListRows(value) {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((row) => {
+      if (!Array.isArray(row)) return null;
+      const mapped = {};
+      for (const cell of row) {
+        if (cell?.name) mapped[cell.name] = getApprovalItemValue(cell);
+      }
+      return mapped;
+    })
+    .filter((row) => row && Object.values(row).some((item) => valueToText(item)));
+}
+
+function getApprovalItemValue(item) {
+  if (item?.option?.text) return item.option.text;
+  return item?.value ?? "";
 }
 
 function omitBomOwnedFields(fields) {
@@ -714,24 +765,78 @@ export function isDuplicateEvent(eventId) {
 }
 
 function getChangeDescriptionParts(record) {
-  const explicit = {
+  return getChangeDescriptionRows(record)[0] || {};
+}
+
+function getChangeDescriptionRows(record) {
+  const explicit = normalizeChangeDescriptionRow({
     before: getField(record, "changeBefore"),
     beforeSupplement: getField(record, "changeBeforeSupplement"),
     after: getField(record, "changeAfter"),
     afterSupplement: getField(record, "changeAfterSupplement"),
     executionMode: getField(record, "executionMode")
-  };
-  const rawText = valueToText(getField(record, "changeDescription")).trim();
-  if (!rawText) return explicit;
+  });
+  const rows = getFieldValues(record, "changeDescription")
+    .flatMap(parseChangeDescriptionValue)
+    .filter((row) => Object.values(row).some((value) => valueToText(value)));
 
+  if (rows.length) return rows;
+  if (Object.values(explicit).some((value) => valueToText(value))) return [explicit];
+  return [];
+}
+
+function parseChangeDescriptionValue(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) {
+    if (value.every((row) => Array.isArray(row))) {
+      return value.map(parseApprovalFieldListRow).filter(Boolean);
+    }
+    if (value.every((row) => row && typeof row === "object" && !Array.isArray(row))) {
+      return value.map(normalizeChangeDescriptionRow).filter((row) => Object.values(row).some((item) => valueToText(item)));
+    }
+    return value.flatMap(parseChangeDescriptionValue);
+  }
+  if (typeof value === "object") {
+    return [normalizeChangeDescriptionRow(value)].filter((row) => Object.values(row).some((item) => valueToText(item)));
+  }
+
+  const rawText = String(value || "").trim();
+  if (!rawText) return [];
   const parsed = parseLabeledChangeDescription(rawText);
+  return [normalizeChangeDescriptionRow({
+    before: parsed.before || (parsed.hasAny ? "" : rawText),
+    beforeSupplement: parsed.beforeSupplement || "",
+    after: parsed.after || "",
+    afterSupplement: parsed.afterSupplement || "",
+    executionMode: parsed.executionMode || ""
+  })];
+}
+
+function parseApprovalFieldListRow(row) {
+  if (!Array.isArray(row)) return null;
+  const mapped = {};
+  for (const item of row) {
+    if (item?.name) mapped[item.name] = getApprovalItemValue(item);
+  }
+  return normalizeChangeDescriptionRow(mapped);
+}
+
+function normalizeChangeDescriptionRow(row) {
   return {
-    before: explicit.before || parsed.before || (parsed.hasAny ? "" : rawText),
-    beforeSupplement: explicit.beforeSupplement || parsed.beforeSupplement || "",
-    after: explicit.after || parsed.after || "",
-    afterSupplement: explicit.afterSupplement || parsed.afterSupplement || "",
-    executionMode: explicit.executionMode || parsed.executionMode || ""
+    before: pickChangeField(row, ["before", "变更前"]),
+    beforeSupplement: pickChangeField(row, ["beforeSupplement", "变更前补充描述", "变更前描述补充"]),
+    after: pickChangeField(row, ["after", "变更后"]),
+    afterSupplement: pickChangeField(row, ["afterSupplement", "变更后补充描述", "变更后描述补充"]),
+    executionMode: pickChangeField(row, ["executionMode", "执行方式"])
   };
+}
+
+function pickChangeField(row, keys) {
+  for (const key of keys) {
+    const value = row?.[key];
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
 }
 
 function parseLabeledChangeDescription(text) {
@@ -783,14 +888,25 @@ function buildSectionTable(title, rows) {
     </table>`;
 }
 
-function buildChangeDescriptionTable(columns) {
+function buildChangeDescriptionTable(rows) {
+  const columns = [
+    ["变更前", "before"],
+    ["变更前补充描述", "beforeSupplement"],
+    ["变更后", "after"],
+    ["变更后补充描述", "afterSupplement"],
+    ["执行方式", "executionMode"]
+  ];
+  const displayRows = rows.length ? rows : [{}];
   const headers = columns.map(([name]) => `<th align="left">${escapeHtml(name)}</th>`).join("");
-  const values = columns.map(([name, value]) => `<td>${formatFieldHtml(value, name)}</td>`).join("");
+  const bodyRows = displayRows.map((row) => {
+    const values = columns.map(([name, key]) => `<td>${formatFieldHtml(row[key], name)}</td>`).join("");
+    return `<tr>${values}</tr>`;
+  }).join("");
   return `
     <h3 style="margin:20px 0 8px 0;font-size:16px;">变更描述</h3>
     <table border="1" cellpadding="8" cellspacing="0" style="border-collapse:collapse;width:100%;font-family:Arial,'Microsoft YaHei',sans-serif;font-size:14px;">
       <thead><tr>${headers}</tr></thead>
-      <tbody><tr>${values}</tr></tbody>
+      <tbody>${bodyRows}</tbody>
     </table>`;
 }
 
@@ -1090,7 +1206,7 @@ async function syncMailToFeishuGroup({ record, route, subject, attachments }) {
 }
 
 function buildGroupSyncText({ record, route, subject, attachments }) {
-  const changeDescription = getChangeDescriptionParts(record);
+  const changeDescriptionRows = getChangeDescriptionRows(record);
   const lines = [
     "BOM/ECN邮件同步",
     `主题：${subject}`,
@@ -1107,16 +1223,23 @@ function buildGroupSyncText({ record, route, subject, attachments }) {
     ["BOM类型", valueToText(getField(record, "bomType"))],
     ["变更记录", valueToText(getField(record, "changeLog"))],
     ["ECN编号", valueToText(getField(record, "ecnNumber"))],
-    ["变更原因", valueToText(getField(record, "changeReason"))],
-    ["变更前", valueToText(changeDescription.before)],
-    ["变更前补充描述", valueToText(changeDescription.beforeSupplement)],
-    ["变更后", valueToText(changeDescription.after)],
-    ["变更后补充描述", valueToText(changeDescription.afterSupplement)],
-    ["执行方式", valueToText(changeDescription.executionMode)]
+    ["变更原因", valueToText(getField(record, "changeReason"))]
   ];
   for (const [name, value] of detailRows) {
     if (value) lines.push(`${name}：${value}`);
   }
+  changeDescriptionRows.forEach((row, index) => {
+    const parts = [
+      ["变更前", valueToText(row.before)],
+      ["变更前补充描述", valueToText(row.beforeSupplement)],
+      ["变更后", valueToText(row.after)],
+      ["变更后补充描述", valueToText(row.afterSupplement)],
+      ["执行方式", valueToText(row.executionMode)]
+    ].filter(([, value]) => value);
+    if (parts.length) {
+      lines.push(`变更描述${changeDescriptionRows.length > 1 ? index + 1 : ""}：${parts.map(([name, value]) => `${name}：${value}`).join("；")}`);
+    }
+  });
 
   lines.push("", `收件人：${route.to.join(", ")}`);
   if (route.cc.length) lines.push(`抄送：${route.cc.join(", ")}`);
