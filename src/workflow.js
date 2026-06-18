@@ -100,10 +100,12 @@ export function buildRecipientRoute(record) {
     if (!factoryRoute.ok) return factoryRoute;
   }
 
-  const dynamicRecipients = normalizeEmailList([
-    ...extractEmails(getField(record, "initiator")),
-    ...extractEmails(getField(record, "projectManager"))
-  ]);
+  const dynamicRecipients = config.includeDynamicRecipients
+    ? normalizeEmailList([
+      ...extractEmails(getField(record, "initiator")),
+      ...extractEmails(getField(record, "projectManager"))
+    ])
+    : [];
   const fixedRecipients = normalizeEmailList(config.fixedRecipients);
   const factoryRecipients = config.includeFactoryRecipients ? normalizeEmailList(factoryRoute.to) : [];
   const cc = normalizeEmailList(factoryRoute.cc);
@@ -120,7 +122,8 @@ export function buildRecipientRoute(record) {
     fixedRecipients,
     dynamicRecipients,
     factoryRecipients,
-    factoryRecipientsEnabled: config.includeFactoryRecipients
+    factoryRecipientsEnabled: config.includeFactoryRecipients,
+    dynamicRecipientsEnabled: config.includeDynamicRecipients
   };
 }
 

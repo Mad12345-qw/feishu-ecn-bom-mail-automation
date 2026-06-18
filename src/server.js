@@ -219,6 +219,7 @@ const server = http.createServer(async (req, res) => {
           changeDescription: config.fieldMapping.changeDescription
         },
         fixedRecipientCount: config.fixedRecipients.length,
+        includeDynamicRecipients: config.includeDynamicRecipients,
         includeFactoryRecipients: config.includeFactoryRecipients,
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
         userMailAuth: await getUserAuthStatus()

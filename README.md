@@ -88,6 +88,7 @@ UPSTASH_FEISHU_USER_TOKEN_KEY
 FIXED_RECIPIENTS
 TEST_RECIPIENTS
 INCLUDE_FACTORY_RECIPIENTS
+INCLUDE_DYNAMIC_RECIPIENTS
 READY_STATUS_VALUES
 BITABLE_SOURCES
 BITABLE_TRIGGER_SOURCE_NAMES
@@ -124,10 +125,11 @@ BITABLE_SKIP_EXISTING_ON_START=true
 ```text
 SAFE_TEST_MODE=true
 INCLUDE_FACTORY_RECIPIENTS=false
+INCLUDE_DYNAMIC_RECIPIENTS=false
 READY_STATUS_VALUES=已通过,审批通过,完成,已完成,已发布
 ```
 
-飞书群同步需要客户自建应用具备“发送消息”相关权限，并且应用机器人已加入目标群。固定收件人用英文逗号配置在 `FIXED_RECIPIENTS`，发起人和项目经理邮箱从多维表字段中自动提取。正式发送前必须能识别组装厂字段并匹配到组装厂地址表；否则系统会暂停发送。
+飞书群同步需要客户自建应用具备“发送消息”相关权限，并且应用机器人已加入目标群。固定收件人用英文逗号配置在 `FIXED_RECIPIENTS`，发起人和项目经理邮箱默认从多维表字段中自动提取；如需试运行阶段只发固定对接人，可设置 `INCLUDE_DYNAMIC_RECIPIENTS=false`。正式发送前必须能识别组装厂字段并匹配到组装厂地址表；否则系统会暂停发送。
 
 正式切换工厂收件人时，再改为：
 
