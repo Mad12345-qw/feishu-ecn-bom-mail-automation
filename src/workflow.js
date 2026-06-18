@@ -376,8 +376,7 @@ async function listBitableRecords(source) {
       `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records?${params}`
     );
     const pageItems = data.data?.items || [];
-    const forceHydrate = isLookupSource(source);
-    items.push(...await hydrateBitableRecords(source, pageItems, forceHydrate));
+    items.push(...await Promise.all(pageItems.map((item) => hydrateBitableRecord(source, item))));
 
     pageToken = data.data?.page_token || "";
     if (!data.data?.has_more) break;
@@ -386,30 +385,13 @@ async function listBitableRecords(source) {
   return items;
 }
 
-async function hydrateBitableRecords(source, pageItems, forceHydrate) {
-  if (!forceHydrate) {
-    return Promise.all(pageItems.map((item) => hydrateBitableRecord(source, item, false)));
-  }
-
-  const items = [];
-  for (const item of pageItems) {
-    items.push(await hydrateBitableRecord(source, item, true));
-    await sleep(120);
-  }
-  return items;
-}
-
-async function hydrateBitableRecord(source, item, force = false) {
-  if (!force && item?.fields && Object.keys(item.fields).length) return item;
+async function hydrateBitableRecord(source, item) {
+  if (item?.fields && Object.keys(item.fields).length) return item;
 
   const recordId = item?.record_id || item?.id || "";
   if (!recordId) return item;
 
   return getBitableRecord(source, recordId);
-}
-
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function getBitableRecord(source, recordId) {
@@ -458,6 +440,14 @@ async function syncBitableSource(source, items, lookupRecords) {
     }
 
     try {
+      const persistentState = await readPersistentRecordState(recordKey);
+      if (persistentState?.fingerprint === fingerprint && persistentState.status === "sent") {
+        processedRecordFingerprints.add(fingerprint);
+        recordStatusByKey.set(recordKey, readiness.statusText);
+        results.push({ recordId, status: "skipped_persisted_sent", approvalStatus: readiness.statusText });
+        continue;
+      }
+
       const enrichedFields = await enrichTriggerRecord(fields, lookupRecords);
       const result = await processBusinessRecord(enrichedFields, {
         readinessRecord: fields,
@@ -466,6 +456,14 @@ async function syncBitableSource(source, items, lookupRecords) {
       if (result.status !== "blocked") {
         processedRecordFingerprints.add(fingerprint);
         recordStatusByKey.set(recordKey, readiness.statusText);
+      }
+      if (result.status === "sent") {
+        await writePersistentRecordState(recordKey, {
+          fingerprint,
+          status: "sent",
+          statusText: readiness.statusText,
+          sentAt: new Date().toISOString()
+        });
       }
       results.push({ recordId, result });
     } catch (error) {
@@ -715,6 +713,67 @@ function maskToken(value) {
   const text = String(value || "");
   if (text.length <= 10) return text ? "***" : "";
   return `${text.slice(0, 6)}...${text.slice(-4)}`;
+}
+
+async function readPersistentRecordState(recordKey) {
+  if (!isUpstashConfigured()) return null;
+
+  try {
+    const data = await upstashRequest(`/get/${encodeURIComponent(getPersistentRecordStateKey(recordKey))}`);
+    if (data.result === null || data.result === undefined || data.result === "") return null;
+    return typeof data.result === "object" ? data.result : JSON.parse(String(data.result));
+  } catch {
+    return null;
+  }
+}
+
+async function writePersistentRecordState(recordKey, state) {
+  if (!isUpstashConfigured()) return;
+
+  try {
+    await upstashRequest(`/set/${encodeURIComponent(getPersistentRecordStateKey(recordKey))}`, {
+      method: "POST",
+      body: JSON.stringify(state)
+    });
+  } catch {
+    // Persistent dedupe is a protection layer; a write failure should not make a sent mail look failed.
+  }
+}
+
+function getPersistentRecordStateKey(recordKey) {
+  const hash = crypto.createHash("sha256").update(recordKey).digest("hex");
+  return `feishu:bitable-record-state:${hash}`;
+}
+
+function isUpstashConfigured() {
+  return Boolean(config.upstash.redisRestUrl && config.upstash.redisRestToken);
+}
+
+async function upstashRequest(pathname, options = {}) {
+  const baseUrl = config.upstash.redisRestUrl.replace(/\/+$/, "");
+  const response = await fetch(`${baseUrl}${pathname}`, {
+    ...options,
+    headers: {
+      authorization: `Bearer ${config.upstash.redisRestToken}`,
+      "content-type": "text/plain; charset=utf-8",
+      ...(options.headers || {})
+    }
+  });
+
+  const text = await response.text();
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    data = { raw: text };
+  }
+
+  if (!response.ok || data.error) {
+    const message = data.error || data.message || response.statusText;
+    throw new Error(`Upstash Redis failed: ${message}`);
+  }
+
+  return data;
 }
 
 export function mapFeishuEventToRecord(eventBody) {
