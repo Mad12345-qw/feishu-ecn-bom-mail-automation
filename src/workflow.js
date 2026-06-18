@@ -484,8 +484,9 @@ function isLookupSource(source) {
 }
 
 async function enrichTriggerRecord(triggerFields, lookupRecords) {
-  const relatedRecords = findRelatedLookupRecords(triggerFields, lookupRecords);
-  if (!relatedRecords.length) return triggerFields;
+  const enrichedTriggerFields = await enrichFieldsFromApprovalForm(triggerFields);
+  const relatedRecords = findRelatedLookupRecords(enrichedTriggerFields, lookupRecords);
+  if (!relatedRecords.length) return enrichedTriggerFields;
 
   const merged = {};
   const lookupSourceIds = [];
@@ -498,7 +499,7 @@ async function enrichTriggerRecord(triggerFields, lookupRecords) {
   return {
     ...merged,
     __lookupSourceIDs: lookupSourceIds,
-    ...triggerFields
+    ...enrichedTriggerFields
   };
 }
 
@@ -607,9 +608,24 @@ function getRelationCandidates(fields) {
   ];
 
   return [...new Set(directValues
+    .concat(collectRelationCandidateValues(fields))
     .flatMap((value) => valueToText(value).split(/[、,，;；\n\r]/))
     .map(normalizeRelationValue)
     .filter((value) => value.length >= 4))];
+}
+
+function collectRelationCandidateValues(fields) {
+  return Object.entries(fields || {})
+    .filter(([fieldName]) => isRelationCandidateField(fieldName))
+    .map(([, value]) => value);
+}
+
+function isRelationCandidateField(fieldName) {
+  const name = String(fieldName || "");
+  return /ECN|ECR|SourceID/i.test(name)
+    || name.includes("关联")
+    || name.includes("申请编号")
+    || name.includes("审批编号");
 }
 
 function relationMatches(left, right) {
