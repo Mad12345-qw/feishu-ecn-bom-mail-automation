@@ -422,14 +422,15 @@ async function syncBitableSource(source, items, lookupRecords) {
       continue;
     }
 
-    processedRecordFingerprints.add(fingerprint);
     if (config.bitable.skipExistingOnStart && !bootstrappedBitableSources.has(sourceId)) {
+      processedRecordFingerprints.add(fingerprint);
       recordStatusByKey.set(recordKey, readiness.statusText);
       results.push({ recordId, status: "skipped_baseline" });
       continue;
     }
 
     if (readiness.ok && isReadyStatus(previousStatus)) {
+      processedRecordFingerprints.add(fingerprint);
       recordStatusByKey.set(recordKey, readiness.statusText);
       results.push({ recordId, status: "skipped_already_ready", approvalStatus: readiness.statusText });
       continue;
@@ -441,6 +442,7 @@ async function syncBitableSource(source, items, lookupRecords) {
         routeRecord: fields
       });
       if (result.status !== "blocked") {
+        processedRecordFingerprints.add(fingerprint);
         recordStatusByKey.set(recordKey, readiness.statusText);
       }
       results.push({ recordId, result });
