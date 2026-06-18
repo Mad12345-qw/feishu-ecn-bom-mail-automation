@@ -245,6 +245,33 @@ export function createRecordFingerprint(sourceId, recordId, fields) {
     .digest("hex");
 }
 
+function getBusinessSendStateKey(fields, fallbackSerialNumber = "") {
+  const serialNumber = normalizeBusinessSerialNumber(
+    fallbackSerialNumber
+    || fields?.["申请编号"]
+    || getField(fields || {}, "applicationNo")
+  );
+  if (serialNumber) return `business:bom:${serialNumber}`;
+
+  const fallback = crypto
+    .createHash("sha256")
+    .update(JSON.stringify(fields || {}))
+    .digest("hex");
+  return `business:bom:unknown:${fallback}`;
+}
+
+function normalizeBusinessSerialNumber(value) {
+  const text = valueToText(value).trim();
+  const match = text.match(/\b\d{12}\b/);
+  return match ? match[0] : text;
+}
+
+function maskBusinessKey(key) {
+  const text = String(key || "");
+  if (!text) return "";
+  return text.replace(/business:bom:(\d{4})\d+(\d{3})/, "business:bom:$1***$2");
+}
+
 export async function syncConfiguredBitableRecords() {
   if (!config.bitable.sources.length) {
     return {
@@ -407,9 +434,20 @@ export async function sendConfiguredBitableRecord({ sourceName = "", recordId = 
   const fields = item.fields || {};
   const sourceId = getBitableSourceId(source);
   const recordKey = `${sourceId}:${recordId}`;
+  const businessKey = getBusinessSendStateKey(fields);
   const fingerprint = createRecordFingerprint(sourceId, recordId, fields);
 
   if (!force) {
+    const businessState = await readPersistentRecordState(businessKey);
+    if (businessState?.status === "sent") {
+      return {
+        status: "skipped_business_sent",
+        source: describeBitableSource(source),
+        recordId,
+        approvalStatus: getRecordReadiness(fields).statusText,
+        businessKey: maskBusinessKey(businessKey)
+      };
+    }
     const persistentState = await readPersistentRecordState(recordKey);
     if (persistentState?.status === "sent") {
       return {
@@ -428,12 +466,17 @@ export async function sendConfiguredBitableRecord({ sourceName = "", recordId = 
     routeRecord: fields
   });
   if (result.status === "sent") {
-    await writePersistentRecordState(recordKey, {
+    const sentState = {
       fingerprint,
       status: "sent",
       statusText: getRecordReadiness(fields).statusText,
       sentAt: new Date().toISOString(),
       sentBy: force ? "manual_force" : "manual"
+    };
+    await writePersistentRecordState(recordKey, sentState);
+    await writePersistentRecordState(businessKey, {
+      ...sentState,
+      sourceKey: recordKey
     });
   }
 
@@ -467,9 +510,23 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
     };
   }
   const recordKey = `approval:${approvalRecord.approvalCode || ""}:${approvalRecord.instanceCode}`;
+  const businessKey = getBusinessSendStateKey(approvalRecord.fields, approvalRecord.serialNumber);
   const fingerprint = createRecordFingerprint("approval", approvalRecord.instanceCode, approvalRecord.fields);
 
   if (!force) {
+    const businessState = await readPersistentRecordState(businessKey);
+    if (businessState?.status === "sent") {
+      return {
+        status: "skipped_business_sent",
+        source: {
+          name: approvalRecord.approvalName,
+          instanceCode: approvalRecord.instanceCode,
+          serialNumber: approvalRecord.serialNumber,
+          role: "approval_trigger"
+        },
+        businessKey: maskBusinessKey(businessKey)
+      };
+    }
     const persistentState = await readPersistentRecordState(recordKey);
     if (persistentState?.status === "sent") {
       return {
@@ -491,12 +548,17 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
     routeRecord: approvalRecord.fields
   });
   if (result.status === "sent") {
-    await writePersistentRecordState(recordKey, {
+    const sentState = {
       fingerprint,
       status: "sent",
       statusText: getRecordReadiness(approvalRecord.fields).statusText,
       sentAt: new Date().toISOString(),
       sentBy: force ? "approval_manual_force" : "approval_manual"
+    };
+    await writePersistentRecordState(recordKey, sentState);
+    await writePersistentRecordState(businessKey, {
+      ...sentState,
+      sourceKey: recordKey
     });
   }
 
@@ -608,6 +670,7 @@ async function syncBitableSource(source, items, lookupRecords) {
     const readiness = getRecordReadiness(fields);
     const previousStatus = recordStatusByKey.get(recordKey) || "";
     const fingerprint = createRecordFingerprint(sourceId, recordId, fields);
+    const businessKey = getBusinessSendStateKey(fields);
     if (processedRecordFingerprints.has(fingerprint)) {
       results.push({ recordId, status: "skipped_duplicate" });
       continue;
@@ -631,6 +694,18 @@ async function syncBitableSource(source, items, lookupRecords) {
     }
 
     try {
+      const businessState = await readPersistentRecordState(businessKey);
+      if (businessState?.status === "sent") {
+        processedRecordFingerprints.add(fingerprint);
+        recordStatusByKey.set(recordKey, readiness.statusText);
+        results.push({
+          recordId,
+          status: "skipped_business_sent",
+          approvalStatus: readiness.statusText,
+          businessKey: maskBusinessKey(businessKey)
+        });
+        continue;
+      }
       const persistentState = await readPersistentRecordState(recordKey);
       if (persistentState?.status === "sent") {
         processedRecordFingerprints.add(fingerprint);
@@ -654,11 +729,16 @@ async function syncBitableSource(source, items, lookupRecords) {
         recordStatusByKey.set(recordKey, readiness.statusText);
       }
       if (result.status === "sent") {
-        await writePersistentRecordState(recordKey, {
+        const sentState = {
           fingerprint,
           status: "sent",
           statusText: readiness.statusText,
           sentAt: new Date().toISOString()
+        };
+        await writePersistentRecordState(recordKey, sentState);
+        await writePersistentRecordState(businessKey, {
+          ...sentState,
+          sourceKey: recordKey
         });
       }
       results.push({ recordId, result });
