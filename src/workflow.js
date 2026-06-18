@@ -405,7 +405,6 @@ async function syncBitableSource(source, items, lookupRecords) {
   const results = [];
   for (const item of items) {
     const fields = item.fields || {};
-    const enrichedFields = await enrichTriggerRecord(fields, lookupRecords);
     const recordId = item.record_id || item.id || "";
     const recordKey = `${sourceId}:${recordId}`;
 
@@ -437,6 +436,7 @@ async function syncBitableSource(source, items, lookupRecords) {
     }
 
     try {
+      const enrichedFields = await enrichTriggerRecord(fields, lookupRecords);
       const result = await processBusinessRecord(enrichedFields, {
         readinessRecord: fields,
         routeRecord: fields
