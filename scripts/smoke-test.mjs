@@ -27,18 +27,7 @@ const sampleRecord = {
   },
   "发起人部门": "项目部",
   "变更部门": "供应链部",
-  "变更描述": [
-    {
-      "变更前": "C415,C419原来只有1个替代料",
-      "变更后": "C415,C419增加多1个替代料",
-      "执行方式": "立即变更"
-    },
-    {
-      "变更前": "TEST测试审批发送邮件功能变更前2",
-      "变更后": "TEST测试审批发送邮件功能变更后2",
-      "执行方式": "其他"
-    }
-  ]
+  "变更描述": "变更前:C415,C419原来只有1个替代料 | 变更后:C415,C419增加多1个替代料 | 执行方式:立即变更;\n\n变更前:TEST测试审批发送邮件功能变更前2 | 变更后:TEST测试审批发送邮件功能变更后2 | 执行方式:其他;\n\n变更前:TEST测试审批发送邮件功能变更前3 | 变更后:TEST测试审批发送邮件功能变更后3 | 执行方式:其他"
 };
 
 const route = routeByAssemblyFactory(sampleRecord);
@@ -68,6 +57,8 @@ assert.equal(html.includes("C415,C419原来只有1个替代料"), true);
 assert.equal(html.includes("C415,C419增加多1个替代料"), true);
 assert.equal(html.includes("TEST测试审批发送邮件功能变更前2"), true);
 assert.equal(html.includes("TEST测试审批发送邮件功能变更后2"), true);
+assert.equal(html.includes("TEST测试审批发送邮件功能变更前3"), true);
+assert.equal(html.includes("TEST测试审批发送邮件功能变更后3"), true);
 assert.equal(html.includes("立即变更"), true);
 
 console.log(JSON.stringify({

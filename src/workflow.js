@@ -947,14 +947,33 @@ function parseChangeDescriptionValue(value) {
 
   const rawText = String(value || "").trim();
   if (!rawText) return [];
-  const parsed = parseLabeledChangeDescription(rawText);
-  return [normalizeChangeDescriptionRow({
-    before: parsed.before || (parsed.hasAny ? "" : rawText),
-    beforeSupplement: parsed.beforeSupplement || "",
-    after: parsed.after || "",
-    afterSupplement: parsed.afterSupplement || "",
-    executionMode: parsed.executionMode || ""
-  })];
+  return parseChangeDescriptionTextRows(rawText);
+}
+
+function parseChangeDescriptionTextRows(rawText) {
+  const rowTexts = splitChangeDescriptionTextRows(rawText);
+  return rowTexts
+    .map((rowText) => {
+      const parsed = parseLabeledChangeDescription(rowText);
+      return normalizeChangeDescriptionRow({
+        before: parsed.before || (parsed.hasAny ? "" : rowText),
+        beforeSupplement: parsed.beforeSupplement || "",
+        after: parsed.after || "",
+        afterSupplement: parsed.afterSupplement || "",
+        executionMode: parsed.executionMode || ""
+      });
+    })
+    .filter((row) => Object.values(row).some((item) => valueToText(item)));
+}
+
+function splitChangeDescriptionTextRows(rawText) {
+  const text = String(rawText || "").trim();
+  if (!text) return [];
+  const rows = text
+    .split(/[;；]\s*(?=变更前\s*[:：])/)
+    .map((row) => row.trim())
+    .filter(Boolean);
+  return rows.length ? rows : [text];
 }
 
 function parseApprovalFieldListRow(row) {
