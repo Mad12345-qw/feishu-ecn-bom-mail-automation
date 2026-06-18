@@ -1363,6 +1363,7 @@ function formatFieldHtml(value, fieldName = "") {
     return value.map((item) => formatFieldHtml(item, fieldName)).filter(Boolean).join("<br>");
   }
   if (typeof value === "number" && fieldName.includes("日期")) return formatDate(value);
+  if (typeof value === "string" && fieldName.includes("日期") && isParsableDateString(value)) return formatDate(value);
   if (typeof value === "object") {
     const text = value.name || value.text || value.value || value.file_name || value.title || value.email || JSON.stringify(value);
     const fileToken = value.file_token || value.fileToken || value.token;
@@ -1712,6 +1713,11 @@ function buildGroupSyncText({ record, route, subject, attachments }) {
     lines.push(`附件：${attachments.map((item) => item.filename).join("、")}`);
   }
   return lines.join("\n");
+}
+
+function isParsableDateString(value) {
+  const text = String(value || "").trim();
+  return /^\d{4}-\d{2}-\d{2}(?:[T\s].*)?$/.test(text) && !Number.isNaN(new Date(text).getTime());
 }
 
 function formatDate(timestamp) {
