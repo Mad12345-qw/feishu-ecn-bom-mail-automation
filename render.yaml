@@ -34,6 +34,12 @@ services:
         sync: false
       - key: FEISHU_SYNC_CHAT_ID
         sync: false
+      - key: FEISHU_BOM_APPROVAL_CODES
+        sync: false
+      - key: FEISHU_BOM_APPROVAL_NAMES
+        value: BOM释放审批
+      - key: APPROVAL_SYNC_LOOKBACK_MINUTES
+        value: "30"
       - key: UPSTASH_REDIS_REST_URL
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN

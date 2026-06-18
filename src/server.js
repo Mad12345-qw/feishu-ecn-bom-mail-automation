@@ -3,7 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { config, missingRequiredConfig } from "./config.js";
 import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
-import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processBusinessRecord, sendConfiguredApprovalInstance, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredBitableRecords } from "./workflow.js";
+import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processApprovalInstanceEvent, processBusinessRecord, sendConfiguredApprovalInstance, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredApprovalInstances, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
   res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
@@ -67,6 +67,12 @@ async function handleFeishuWebhook(req, res) {
     return sendJson(res, 200, duplicate);
   }
 
+  const approvalResult = await processApprovalInstanceEvent(body);
+  if (approvalResult) {
+    appendLog({ type: "feishu_approval_webhook", summary, result: approvalResult });
+    return sendJson(res, 200, approvalResult);
+  }
+
   const sourceGuard = guardFeishuEventTriggerSource(body);
   if (!sourceGuard.ok) {
     const skipped = {
@@ -100,6 +106,17 @@ async function handleBitableSync(req, res, url) {
 
   const result = await syncConfiguredBitableRecords();
   appendLog({ type: "bitable_sync", result });
+  return sendJson(res, 200, result);
+}
+
+async function handleApprovalSync(req, res, url) {
+  const token = url.searchParams.get("token") || req.headers["x-debug-token"];
+  if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
+    return sendJson(res, 403, { error: "forbidden" });
+  }
+
+  const result = await syncConfiguredApprovalInstances();
+  appendLog({ type: "approval_sync", result });
   return sendJson(res, 200, result);
 }
 
@@ -223,6 +240,8 @@ const server = http.createServer(async (req, res) => {
         bitableSkipExistingOnStart: config.bitable.skipExistingOnStart,
         bitableTriggerSourceNames: config.bitable.triggerSourceNames,
         bitableLookupSourceNames: config.bitable.lookupSourceNames,
+        approvalSyncConfigured: Boolean(config.approval.bomApprovalCodes.length),
+        approvalSyncLookbackMinutes: config.approval.syncLookbackMinutes,
         fieldMapping: {
           assemblyFactory: config.fieldMapping.assemblyFactory,
           bomAttachments: config.fieldMapping.bomAttachments,
@@ -255,6 +274,10 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/sync/bitable") {
       return await handleBitableSync(req, res, url);
+    }
+
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/sync/approvals") {
+      return await handleApprovalSync(req, res, url);
     }
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-test-mail") {

@@ -320,6 +320,71 @@ export async function syncConfiguredBitableRecords() {
   };
 }
 
+export async function syncConfiguredApprovalInstances() {
+  if (!config.approval.bomApprovalCodes.length) {
+    return {
+      status: "blocked",
+      reason: "Missing FEISHU_BOM_APPROVAL_CODES"
+    };
+  }
+
+  const now = Date.now();
+  const from = now - Math.max(1, config.approval.syncLookbackMinutes) * 60 * 1000;
+  const sources = [];
+  const results = [];
+
+  for (const approvalCode of config.approval.bomApprovalCodes) {
+    try {
+      const instances = await queryApprovalInstances({
+        approvalCode,
+        startTimeFrom: from,
+        startTimeTo: now
+      });
+      const sourceResults = [];
+      for (const instance of instances) {
+        if (!isApprovedStatus(instance.status)) {
+          sourceResults.push({
+            instanceCode: instance.instanceCode,
+            serialNumber: instance.serialNumber,
+            status: "skipped_not_approved",
+            approvalStatus: instance.status
+          });
+          continue;
+        }
+        const result = await sendConfiguredApprovalInstance({ instanceCode: instance.instanceCode });
+        sourceResults.push({
+          instanceCode: instance.instanceCode,
+          serialNumber: instance.serialNumber,
+          result
+        });
+      }
+      sources.push({
+        approvalCode: maskToken(approvalCode),
+        total: instances.length,
+        processed: sourceResults.filter((item) => item.result?.result?.status === "sent").length,
+        results: sourceResults
+      });
+      results.push(...sourceResults.map((item) => ({ approvalCode: maskToken(approvalCode), ...item })));
+    } catch (error) {
+      sources.push({
+        approvalCode: maskToken(approvalCode),
+        total: 0,
+        processed: 0,
+        error: error.message,
+        results: []
+      });
+    }
+  }
+
+  return {
+    status: sources.some((source) => source.error) ? "partial" : "synced",
+    sourceCount: sources.length,
+    processed: results.filter((item) => item.result?.result?.status === "sent").length,
+    sources,
+    results
+  };
+}
+
 export async function sendConfiguredBitableRecord({ sourceName = "", recordId = "", force = false } = {}) {
   if (!recordId) {
     return { status: "blocked", reason: "Missing recordId" };
@@ -389,6 +454,18 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
     fetchApprovalInstanceRecord(instanceCode),
     listConfiguredLookupRecords()
   ]);
+  if (!isConfiguredBomApproval(approvalRecord)) {
+    return {
+      status: "skipped_non_bom_approval",
+      source: {
+        name: approvalRecord.approvalName,
+        approvalCode: maskToken(approvalRecord.approvalCode),
+        instanceCode: approvalRecord.instanceCode,
+        serialNumber: approvalRecord.serialNumber,
+        role: "approval_trigger"
+      }
+    };
+  }
   const recordKey = `approval:${approvalRecord.approvalCode || ""}:${approvalRecord.instanceCode}`;
   const fingerprint = createRecordFingerprint("approval", approvalRecord.instanceCode, approvalRecord.fields);
 
@@ -433,6 +510,36 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
     },
     result
   };
+}
+
+export async function processApprovalInstanceEvent(eventBody) {
+  const event = eventBody.event || eventBody;
+  const instanceCode = event.instance_code || event.instanceCode || event.uuid || "";
+  const approvalCode = event.approval_code || event.approvalCode || "";
+  const status = event.status || event.instance_status || event.instanceStatus || event.approval_status || "";
+  const eventType = getFeishuEventType(eventBody);
+  const looksLikeApprovalEvent = /approval/i.test(String(eventType))
+    || Boolean(instanceCode && (approvalCode || status));
+
+  if (!looksLikeApprovalEvent || !instanceCode) return null;
+  if (approvalCode && config.approval.bomApprovalCodes.length && !config.approval.bomApprovalCodes.includes(approvalCode)) {
+    return {
+      status: "skipped_non_bom_approval",
+      reason: "审批定义不在BOM释放审批配置内",
+      approvalCode: maskToken(approvalCode),
+      instanceCode
+    };
+  }
+  if (status && !isApprovedStatus(status)) {
+    return {
+      status: "skipped_not_approved",
+      approvalStatus: status,
+      approvalCode: maskToken(approvalCode),
+      instanceCode
+    };
+  }
+
+  return sendConfiguredApprovalInstance({ instanceCode });
 }
 
 async function listConfiguredLookupRecords() {
@@ -668,6 +775,49 @@ async function fetchApprovalInstanceRecord(instanceCode) {
     serialNumber: instance.serial_number || "",
     fields
   };
+}
+
+async function queryApprovalInstances({ approvalCode, startTimeFrom, startTimeTo }) {
+  const body = {
+    approval_code: approvalCode,
+    instance_start_time_from: String(startTimeFrom),
+    instance_start_time_to: String(startTimeTo),
+    locale: "zh-CN"
+  };
+  const data = await feishuApi("/approval/v4/instances/query?page_size=100", {
+    method: "POST",
+    body: JSON.stringify(body)
+  });
+  const instances = data.data?.instance_list || [];
+  return instances.map(normalizeQueriedApprovalInstance).filter((item) => item.instanceCode);
+}
+
+function normalizeQueriedApprovalInstance(item) {
+  const instance = item.instance || item;
+  return {
+    instanceCode: item.instance_code || instance.code || instance.instance_code || "",
+    serialNumber: item.serial_number || instance.serial_id || instance.serial_number || "",
+    status: item.status || instance.status || "",
+    startTime: item.start_time || instance.start_time || "",
+    endTime: item.end_time || instance.end_time || ""
+  };
+}
+
+function isConfiguredBomApproval(approvalRecord) {
+  if (config.approval.bomApprovalCodes.length
+    && !config.approval.bomApprovalCodes.includes(approvalRecord.approvalCode)) {
+    return false;
+  }
+  if (config.approval.bomApprovalNames.length
+    && !config.approval.bomApprovalNames.includes(approvalRecord.approvalName)) {
+    return false;
+  }
+  return true;
+}
+
+function isApprovedStatus(status) {
+  const text = String(status || "").trim().toUpperCase();
+  return text === "APPROVED" || text === "APPROVE" || text === "PASS" || text === "PASSED" || text === "已通过";
 }
 
 function approvalStatusToReadyText(status) {

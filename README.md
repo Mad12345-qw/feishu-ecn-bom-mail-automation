@@ -8,6 +8,7 @@
 - 健康检查：`GET /health`
 - 本地联调发送入口：`POST /demo/send`
 - ECN/BOM 邮件正文模板
+- 支持 BOM 释放审批实例直接触发邮件，不依赖审批结果先落入多维表
 - 组装厂到收件邮箱的路由表
 - 固定收件人 + 发起人/项目经理 + 组装厂多选收件人的合并去重
 - 邮件发送后同步一条通知到指定飞书群
@@ -82,6 +83,9 @@ FEISHU_APP_SECRET
 FEISHU_VERIFICATION_TOKEN
 FEISHU_SENDER_MAILBOX_ID
 FEISHU_SYNC_CHAT_ID
+FEISHU_BOM_APPROVAL_CODES
+FEISHU_BOM_APPROVAL_NAMES
+APPROVAL_SYNC_LOOKBACK_MINUTES
 UPSTASH_REDIS_REST_URL
 UPSTASH_REDIS_REST_TOKEN
 UPSTASH_FEISHU_USER_TOKEN_KEY
@@ -111,6 +115,22 @@ BITABLE_LOOKUP_SOURCE_NAMES=正式表2
 ```
 
 系统只会把 `BITABLE_TRIGGER_SOURCE_NAMES` 中的表作为邮件触发表；ECN 表只用于按 ECN 编号、关联审批、SourceID、申请编号等字段补充邮件内容和附件，不会因为 ECN 表自身变化直接发送邮件。
+
+正式触发推荐使用 BOM 释放审批实例，而不是等待 BOM 多维表落库。审批通过事件会直接触发邮件；如果事件偶发漏推，可用审批实例同步兜底：
+
+```text
+FEISHU_BOM_APPROVAL_CODES=客户BOM释放审批的 approval_code
+FEISHU_BOM_APPROVAL_NAMES=BOM释放审批
+APPROVAL_SYNC_LOOKBACK_MINUTES=30
+```
+
+审批兜底同步入口：
+
+```text
+https://你的-render-service.onrender.com/sync/approvals?token=你的VerificationToken
+```
+
+`/sync/bitable` 仅作为历史兼容和多维表排查使用，不建议作为正式唯一触发源。
 
 切换正式表时建议先设置：
 

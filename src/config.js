@@ -100,6 +100,11 @@ export const config = {
     triggerSourceNames: parseTextList(process.env.BITABLE_TRIGGER_SOURCE_NAMES, ["正式表1", "BOM", "BOM释放", "BOM释放表"]),
     lookupSourceNames: parseTextList(process.env.BITABLE_LOOKUP_SOURCE_NAMES, ["正式表2", "ECN", "ECN表", "ECN变更通知"])
   },
+  approval: {
+    bomApprovalCodes: parseTextList(process.env.FEISHU_BOM_APPROVAL_CODES, []),
+    bomApprovalNames: parseTextList(process.env.FEISHU_BOM_APPROVAL_NAMES, ["BOM释放审批"]),
+    syncLookbackMinutes: parseNumber(process.env.APPROVAL_SYNC_LOOKBACK_MINUTES, 30)
+  },
   safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
   emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),
   includeFactoryRecipients: parseBoolean(process.env.INCLUDE_FACTORY_RECIPIENTS, true),
