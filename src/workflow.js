@@ -376,7 +376,8 @@ async function listBitableRecords(source) {
       `/bitable/v1/apps/${encodeURIComponent(source.appToken)}/tables/${encodeURIComponent(source.tableId)}/records?${params}`
     );
     const pageItems = data.data?.items || [];
-    items.push(...await Promise.all(pageItems.map((item) => hydrateBitableRecord(source, item))));
+    const forceHydrate = isLookupSource(source);
+    items.push(...await hydrateBitableRecords(source, pageItems, forceHydrate));
 
     pageToken = data.data?.page_token || "";
     if (!data.data?.has_more) break;
@@ -385,13 +386,30 @@ async function listBitableRecords(source) {
   return items;
 }
 
-async function hydrateBitableRecord(source, item) {
-  if (item?.fields && Object.keys(item.fields).length) return item;
+async function hydrateBitableRecords(source, pageItems, forceHydrate) {
+  if (!forceHydrate) {
+    return Promise.all(pageItems.map((item) => hydrateBitableRecord(source, item, false)));
+  }
+
+  const items = [];
+  for (const item of pageItems) {
+    items.push(await hydrateBitableRecord(source, item, true));
+    await sleep(120);
+  }
+  return items;
+}
+
+async function hydrateBitableRecord(source, item, force = false) {
+  if (!force && item?.fields && Object.keys(item.fields).length) return item;
 
   const recordId = item?.record_id || item?.id || "";
   if (!recordId) return item;
 
   return getBitableRecord(source, recordId);
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function getBitableRecord(source, recordId) {
@@ -517,13 +535,24 @@ async function enrichFieldsFromApprovalForm(fields) {
 
   try {
     const formFields = await approvalFormFieldCache.get(instanceCode);
-    return {
-      ...fields,
-      ...formFields
-    };
+    return mergeFieldsWithoutBlankOverwrite(fields, formFields);
   } catch {
     return fields;
   }
+}
+
+function mergeFieldsWithoutBlankOverwrite(baseFields, extraFields) {
+  const merged = { ...(baseFields || {}) };
+  for (const [fieldName, value] of Object.entries(extraFields || {})) {
+    if (hasFieldValue(merged[fieldName]) && !hasFieldValue(value)) continue;
+    if (hasFieldValue(merged[fieldName]) && isRelationCandidateField(fieldName)) continue;
+    merged[fieldName] = value;
+  }
+  return merged;
+}
+
+function hasFieldValue(value) {
+  return value !== undefined && value !== null && value !== "" && valueToText(value) !== "";
 }
 
 async function fetchApprovalFormFields(instanceCode) {
@@ -589,8 +618,12 @@ function omitBomOwnedFields(fields) {
 function findRelatedLookupRecords(triggerFields, lookupRecords) {
   const triggerCandidates = getRelationCandidates(triggerFields);
   if (!triggerCandidates.length) return [];
+  const triggerTokens = getEmbeddedRelationTokens(triggerFields);
 
   return lookupRecords.filter((lookupRecord) => {
+    const lookupTokens = getEmbeddedRelationTokens(lookupRecord.fields);
+    if (triggerTokens.some((token) => lookupTokens.includes(token))) return true;
+
     const lookupCandidates = getRelationCandidates(lookupRecord.fields);
     return triggerCandidates.some((triggerValue) => {
       return lookupCandidates.some((lookupValue) => relationMatches(triggerValue, lookupValue));
@@ -611,9 +644,18 @@ function getRelationCandidates(fields) {
     fields["申请编号"]
   ];
 
-  return [...new Set(directValues
+  const rawValues = directValues
     .concat(collectRelationCandidateValues(fields))
-    .flatMap((value) => valueToText(value).split(/[、,，;；\n\r]/))
+    .concat(collectEmbeddedRelationValues(fields));
+
+  return [...new Set(rawValues
+    .flatMap((value) => {
+      const text = valueToText(value);
+      return [
+        ...text.split(/[、,，;；\n\r]/),
+        ...extractRelationTokens(text)
+      ];
+    })
     .map(normalizeRelationValue)
     .filter((value) => value.length >= 4))];
 }
@@ -630,6 +672,28 @@ function isRelationCandidateField(fieldName) {
     || name.includes("关联")
     || name.includes("申请编号")
     || name.includes("审批编号");
+}
+
+function collectEmbeddedRelationValues(fields) {
+  return getEmbeddedRelationTokens(fields);
+}
+
+function getEmbeddedRelationTokens(fields) {
+  return [...new Set(Object.values(fields || {}).flatMap((value) => {
+    const text = valueToText(value);
+    return extractRelationTokens(text);
+  }).map(normalizeRelationValue).filter(Boolean))];
+}
+
+function extractRelationTokens(text) {
+  const value = String(text || "");
+  const decoded = decodeMaybeBase64(value);
+  const values = decoded === value ? [value] : [value, decoded];
+  return values.flatMap((item) => [
+    ...(item.match(/\b\d{12,}\b/g) || []),
+    ...(item.match(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi) || []),
+    ...(item.match(/\b(?:ECN|ECR)-[A-Z0-9][A-Z0-9._-]*/gi) || [])
+  ]);
 }
 
 function relationMatches(left, right) {
