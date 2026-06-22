@@ -10,7 +10,11 @@
     "enabled": true
   },
   "宣创": {
-    "to": ["xie.wei-wei@tjc-cn.com"],
+    "to": [
+      "tsa-mc@tjc-cn.com",
+      "TSA-ENG-PE@tjc-cn.com",
+      "xie.wei-wei@tjc-cn.com"
+    ],
     "cc": [],
     "enabled": true
   }
