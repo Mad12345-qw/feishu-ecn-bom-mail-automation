@@ -104,6 +104,12 @@ async function handleBitableSync(req, res, url) {
     return sendJson(res, 403, { error: "forbidden" });
   }
 
+  if (!config.bitable.syncEnabled) {
+    const result = { status: "disabled", reason: "BITABLE_SYNC_ENABLED=false" };
+    appendLog({ type: "bitable_sync", result });
+    return sendJson(res, 200, result);
+  }
+
   const result = await syncConfiguredBitableRecords();
   appendLog({ type: "bitable_sync", result });
   return sendJson(res, 200, result);
@@ -231,6 +237,7 @@ const server = http.createServer(async (req, res) => {
         safeTestMode: config.safeTestMode,
         emailDryRun: config.emailDryRun,
         bitableConfigured: Boolean(config.bitable.sources.length),
+        bitableSyncEnabled: config.bitable.syncEnabled,
         bitableSourceCount: config.bitable.sources.length,
         bitableSources: config.bitable.sources.map((source) => ({
           name: source.name,

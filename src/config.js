@@ -94,6 +94,7 @@ export const config = {
   bitable: {
     appToken: process.env.BITABLE_APP_TOKEN || "",
     tableId: process.env.BITABLE_TABLE_ID || "",
+    syncEnabled: parseBoolean(process.env.BITABLE_SYNC_ENABLED, true),
     sources: parseBitableSources(),
     skipExistingOnStart: parseBoolean(process.env.BITABLE_SKIP_EXISTING_ON_START, false),
     bootstrapRecentReadyWindowMinutes: parseNumber(process.env.BITABLE_BOOTSTRAP_RECENT_READY_WINDOW_MINUTES, 30),
