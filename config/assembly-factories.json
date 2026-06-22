@@ -1,21 +1,17 @@
 {
-  "奥海": {
-    "to": [
-      "huangzeyu66@qq.com",
-      "liuzhanxi@miiiw.com",
-      "joey@miiiw.com",
-      "wuxugang@miiiw.com",
-      "duzhongyang@miiiw.com",
-      "taoguangrong@miiiw.com",
-      "yanglijun@miiiw.com",
-      "jiminhui@miiiw.com"
-    ],
+  "迪比科": {
+    "to": ["zenglinggui@dbk.com.hk"],
     "cc": [],
     "enabled": true
   },
-  "示例组装厂": {
-    "to": ["factory@example.com"],
-    "cc": ["pm@example.com"],
+  "奥海": {
+    "to": ["yuanyuelin@aohai.com"],
+    "cc": [],
+    "enabled": true
+  },
+  "宣创": {
+    "to": ["xie.wei-wei@tjc-cn.com"],
+    "cc": [],
     "enabled": true
   }
 }
