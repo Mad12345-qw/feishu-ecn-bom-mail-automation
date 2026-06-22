@@ -31,7 +31,7 @@ const sampleRecord = {
 };
 
 const route = routeByAssemblyFactory(sampleRecord);
-const recipientRoute = buildRecipientRoute(sampleRecord);
+const recipientRoute = await buildRecipientRoute(sampleRecord);
 const html = buildMailHtml(sampleRecord);
 const attachmentRefs = collectAttachmentRefs(sampleRecord);
 const ecnOnlyRoute = routeByAssemblyFactory({ "执行单位": "奥海" });

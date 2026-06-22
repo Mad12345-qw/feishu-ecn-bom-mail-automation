@@ -6,6 +6,7 @@ const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
 const recordStatusByKey = new Map();
 const approvalFormFieldCache = new Map();
+const contactEmailCache = new Map();
 const serviceStartedAt = Date.now();
 
 function getField(source, key) {
@@ -83,7 +84,7 @@ export function routeByAssemblyFactory(record) {
   };
 }
 
-export function buildRecipientRoute(record) {
+export async function buildRecipientRoute(record) {
   const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
   if (!assemblyFactories.length) {
     return { ok: false, reason: "缺少组装厂字段" };
@@ -100,12 +101,10 @@ export function buildRecipientRoute(record) {
     if (!factoryRoute.ok) return factoryRoute;
   }
 
-  const dynamicRecipients = config.includeDynamicRecipients
-    ? normalizeEmailList([
-      ...extractEmails(getField(record, "initiator")),
-      ...extractEmails(getField(record, "projectManager"))
-    ])
-    : [];
+  const dynamicResult = config.includeDynamicRecipients
+    ? await resolveDynamicRecipientEmails(record)
+    : { emails: [], errors: [] };
+  const dynamicRecipients = normalizeEmailList(dynamicResult.emails);
   const fixedRecipients = normalizeEmailList(config.fixedRecipients);
   const factoryRecipients = config.includeFactoryRecipients ? normalizeEmailList(factoryRoute.to) : [];
   const cc = normalizeEmailList(factoryRoute.cc);
@@ -121,6 +120,7 @@ export function buildRecipientRoute(record) {
     cc,
     fixedRecipients,
     dynamicRecipients,
+    dynamicRecipientErrors: dynamicResult.errors,
     factoryRecipients,
     factoryRecipientsEnabled: config.includeFactoryRecipients,
     dynamicRecipientsEnabled: config.includeDynamicRecipients
@@ -176,7 +176,7 @@ export async function processBusinessRecord(record, options = {}) {
     return { status: "skipped_not_ready", reason: readiness.reason, approvalStatus: readiness.statusText };
   }
 
-  const route = buildRecipientRoute(routeRecord);
+  const route = await buildRecipientRoute(routeRecord);
   if (!route.ok) {
     return { status: "blocked", reason: route.reason };
   }
@@ -197,6 +197,7 @@ export async function processBusinessRecord(record, options = {}) {
       cc: route.cc,
       fixedRecipients: route.fixedRecipients,
       dynamicRecipients: route.dynamicRecipients,
+      dynamicRecipientErrors: route.dynamicRecipientErrors,
       factoryRecipients: route.factoryRecipients,
       factoryRecipientsEnabled: route.factoryRecipientsEnabled,
       feishuGroupSync: config.feishu.syncChatId ? "planned" : "not_configured",
@@ -230,6 +231,7 @@ export async function processBusinessRecord(record, options = {}) {
     cc: route.cc,
     fixedRecipients: route.fixedRecipients,
     dynamicRecipients: route.dynamicRecipients,
+    dynamicRecipientErrors: route.dynamicRecipientErrors,
     factoryRecipients: route.factoryRecipients,
     factoryRecipientsEnabled: route.factoryRecipientsEnabled,
     attachments: attachments.map((item) => ({ filename: item.filename, bytes: item.content.length })),
@@ -841,6 +843,10 @@ async function fetchApprovalInstanceRecord(instanceCode) {
   const fields = {
     ...approvalFormToFields(parseApprovalForm(instance.form)),
     SourceID: instance.instance_code || instanceCode,
+    "发起人": {
+      user_id: instance.user_id || "",
+      open_id: instance.open_id || ""
+    },
     "申请状态": statusText,
     "申请编号": instance.serial_number || "",
     "发起时间": instance.start_time || "",
@@ -1880,6 +1886,60 @@ function extractEmails(value) {
     return Object.values(value).flatMap(extractEmails);
   }
   return String(value).match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi) || [];
+}
+
+async function resolveDynamicRecipientEmails(record) {
+  const values = [
+    ...getFieldValues(record, "initiator"),
+    ...getFieldValues(record, "projectManager")
+  ];
+  const emails = values.flatMap(extractEmails);
+  const errors = [];
+  for (const ref of extractContactRefs(values)) {
+    try {
+      const email = await resolveContactEmail(ref);
+      if (email) emails.push(email);
+    } catch (error) {
+      errors.push({ idType: ref.idType, id: maskContactId(ref.id), error: error.message });
+    }
+  }
+  return { emails: normalizeEmailList(emails), errors };
+}
+
+function extractContactRefs(value) {
+  if (value === undefined || value === null || value === "") return [];
+  if (Array.isArray(value)) return value.flatMap(extractContactRefs);
+  if (typeof value === "object") {
+    const refs = [];
+    if (value.user_id) refs.push({ idType: "user_id", id: String(value.user_id) });
+    if (value.open_id) refs.push({ idType: "open_id", id: String(value.open_id) });
+    for (const [key, child] of Object.entries(value)) {
+      if (key === "user_id" || key === "open_id" || key === "email") continue;
+      refs.push(...extractContactRefs(child));
+    }
+    return refs;
+  }
+  const text = String(value).trim();
+  if (!text || text.includes("@") || /^https?:\/\//i.test(text)) return [];
+  return /^[A-Za-z0-9_-]{4,64}$/.test(text) ? [{ idType: "user_id", id: text }] : [];
+}
+
+async function resolveContactEmail(ref) {
+  const cacheKey = `${ref.idType}:${ref.id}`;
+  if (contactEmailCache.has(cacheKey)) return contactEmailCache.get(cacheKey);
+  const data = await feishuApi(
+    `/contact/v3/users/${encodeURIComponent(ref.id)}?user_id_type=${encodeURIComponent(ref.idType)}`
+  );
+  const user = data.data?.user || data.data || {};
+  const email = normalizeEmailList([user.email, user.enterprise_email])[0] || "";
+  contactEmailCache.set(cacheKey, email);
+  return email;
+}
+
+function maskContactId(id) {
+  const text = String(id || "");
+  if (text.length <= 4) return text;
+  return `${text.slice(0, 2)}...${text.slice(-2)}`;
 }
 
 function escapeHtml(value) {
