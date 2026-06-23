@@ -10,6 +10,46 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function summarizeSyncResult(result) {
+  const flatResults = Array.isArray(result?.results) ? result.results : [];
+  const statusCounts = {};
+  const errorSamples = [];
+
+  for (const item of flatResults) {
+    const status = item.status || item.result?.status || item.result?.result?.status || "unknown";
+    statusCounts[status] = (statusCounts[status] || 0) + 1;
+    const error = item.error || item.result?.error || item.result?.result?.error;
+    if (error && errorSamples.length < 5) {
+      errorSamples.push({
+        instanceCode: item.instanceCode ? String(item.instanceCode).slice(0, 8) + "..." : undefined,
+        serialNumber: item.serialNumber,
+        status,
+        error
+      });
+    }
+  }
+
+  return {
+    status: result?.status,
+    sourceCount: result?.sourceCount,
+    total: result?.total,
+    processed: result?.processed,
+    statusCounts,
+    errorSamples,
+    sources: Array.isArray(result?.sources)
+      ? result.sources.map((source) => ({
+        approvalCode: source.approvalCode,
+        source: source.source,
+        role: source.role,
+        total: source.total,
+        processed: source.processed,
+        error: source.error,
+        resultCount: Array.isArray(source.results) ? source.results.length : 0
+      }))
+      : []
+  };
+}
+
 function sendHtml(res, statusCode, html) {
   res.writeHead(statusCode, { "content-type": "text/html; charset=utf-8" });
   res.end(html);
@@ -122,8 +162,10 @@ async function handleApprovalSync(req, res, url) {
   }
 
   const result = await syncConfiguredApprovalInstances();
-  appendLog({ type: "approval_sync", result });
-  return sendJson(res, 200, result);
+  const compact = url.searchParams.get("full") !== "true";
+  const response = compact ? summarizeSyncResult(result) : result;
+  appendLog({ type: "approval_sync", compact, result: response });
+  return sendJson(res, 200, response);
 }
 
 async function handleTestMail(req, res, url) {
