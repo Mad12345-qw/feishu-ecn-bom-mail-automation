@@ -10,6 +10,23 @@ function sendJson(res, statusCode, payload) {
   res.end(JSON.stringify(payload));
 }
 
+function sendJsonWithSizeGuard(res, statusCode, payload, fallbackPayload, maxBytes = 50000) {
+  const raw = JSON.stringify(payload);
+  if (Buffer.byteLength(raw, "utf8") <= maxBytes) {
+    res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+    return res.end(raw);
+  }
+
+  const fallback = {
+    ...fallbackPayload,
+    responseTruncated: true,
+    originalResponseBytes: Buffer.byteLength(raw, "utf8"),
+    note: "Full sync response exceeded the response size guard and was replaced with a compact summary."
+  };
+  res.writeHead(statusCode, { "content-type": "application/json; charset=utf-8" });
+  return res.end(JSON.stringify(fallback));
+}
+
 function summarizeSyncResult(result) {
   const flatResults = Array.isArray(result?.results) ? result.results : [];
   const statusCounts = {};
@@ -163,9 +180,10 @@ async function handleApprovalSync(req, res, url) {
 
   const result = await syncConfiguredApprovalInstances();
   const compact = url.searchParams.get("full") !== "true";
-  const response = compact ? summarizeSyncResult(result) : result;
-  appendLog({ type: "approval_sync", compact, result: response });
-  return sendJson(res, 200, response);
+  const summary = summarizeSyncResult(result);
+  const response = compact ? summary : result;
+  appendLog({ type: "approval_sync", compact, result: summary });
+  return sendJsonWithSizeGuard(res, 200, response, summary);
 }
 
 async function handleTestMail(req, res, url) {
