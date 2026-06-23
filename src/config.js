@@ -73,7 +73,36 @@ function parseBitableSources() {
   return appToken && tableId ? [{ appToken, tableId, name: "default" }] : [];
 }
 
+function parseFactoryRecipients(value, fallback = {}) {
+  const raw = String(value || "").trim();
+  if (!raw) return { routes: fallback, source: "config" };
+
+  const routes = {};
+  for (const entry of raw.split(";")) {
+    const item = entry.trim();
+    if (!item) continue;
+    const idx = item.indexOf("=");
+    if (idx <= 0) continue;
+    const name = item.slice(0, idx).trim();
+    const recipients = item.slice(idx + 1)
+      .split(/[,，\n\r]+/)
+      .map((email) => email.trim())
+      .filter(Boolean);
+    if (!name || !recipients.length) continue;
+    routes[name] = { to: recipients, cc: [], enabled: true };
+  }
+
+  return Object.keys(routes).length
+    ? { routes, source: "env" }
+    : { routes: fallback, source: "config" };
+}
+
 loadDotEnv();
+
+const assemblyFactoriesConfig = parseFactoryRecipients(
+  process.env.FACTORY_RECIPIENTS,
+  readJson("config/assembly-factories.json", {})
+);
 
 export const config = {
   rootDir,
@@ -113,7 +142,8 @@ export const config = {
   readyStatusValues: parseTextList(process.env.READY_STATUS_VALUES, ["已通过", "审批通过", "完成", "已完成", "已发布"]),
   fixedRecipients: parseCsvList(process.env.FIXED_RECIPIENTS),
   testRecipients: parseCsvList(process.env.TEST_RECIPIENTS),
-  assemblyFactories: readJson("config/assembly-factories.json", {}),
+  assemblyFactories: assemblyFactoriesConfig.routes,
+  assemblyFactoriesSource: assemblyFactoriesConfig.source,
   fieldMapping: readJson("config/field-mapping.json", {})
 };
 
