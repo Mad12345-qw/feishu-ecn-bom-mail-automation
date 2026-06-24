@@ -540,6 +540,19 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
       }
     };
   }
+  if (!isApprovedStatus(approvalRecord.rawStatus)) {
+    return {
+      status: "skipped_final_status_not_approved",
+      source: {
+        name: approvalRecord.approvalName,
+        instanceCode: approvalRecord.instanceCode,
+        serialNumber: approvalRecord.serialNumber,
+        role: "approval_trigger"
+      },
+      approvalStatus: approvalRecord.rawStatus,
+      statusText: getRecordReadiness(approvalRecord.fields).statusText
+    };
+  }
   const recordKey = `approval:${approvalRecord.approvalCode || ""}:${approvalRecord.instanceCode}`;
   const businessKey = getBusinessSendStateKey(approvalRecord.fields, approvalRecord.serialNumber);
   const fingerprint = createRecordFingerprint("approval", approvalRecord.instanceCode, approvalRecord.fields);
@@ -888,6 +901,7 @@ async function fetchApprovalInstanceRecord(instanceCode) {
     approvalName: instance.approval_name || "",
     instanceCode: instance.instance_code || instanceCode,
     serialNumber: instance.serial_number || "",
+    rawStatus: instance.status || "",
     fields
   };
 }
