@@ -73,6 +73,18 @@ function parseBitableSources() {
   return appToken && tableId ? [{ appToken, tableId, name: "default" }] : [];
 }
 
+function parseBitableSource(value) {
+  const raw = String(value || "").trim();
+  if (raw) {
+    const [appToken, tableId, name] = raw.split("|").map((part) => part.trim());
+    return appToken && tableId ? { appToken, tableId, name: name || "recipient-config" } : null;
+  }
+
+  const appToken = process.env.RECIPIENT_CONFIG_APP_TOKEN || "";
+  const tableId = process.env.RECIPIENT_CONFIG_TABLE_ID || "";
+  return appToken && tableId ? { appToken, tableId, name: "recipient-config" } : null;
+}
+
 function parseFactoryRecipients(value, fallback = {}) {
   const raw = String(value || "").trim();
   if (!raw) return { routes: fallback, source: "config" };
@@ -150,6 +162,7 @@ export const config = {
     triggerSourceNames: parseTextList(process.env.BITABLE_TRIGGER_SOURCE_NAMES, ["正式表1", "BOM", "BOM释放", "BOM释放表"]),
     lookupSourceNames: parseTextList(process.env.BITABLE_LOOKUP_SOURCE_NAMES, ["正式表2", "ECN", "ECN表", "ECN变更通知"])
   },
+  recipientConfig: parseBitableSource(process.env.RECIPIENT_CONFIG_BITABLE),
   approval: {
     bomApprovalCodes: parseTextList(process.env.FEISHU_BOM_APPROVAL_CODES, []),
     bomApprovalNames: parseTextList(process.env.FEISHU_BOM_APPROVAL_NAMES, ["BOM释放审批"]),

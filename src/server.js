@@ -307,6 +307,12 @@ const server = http.createServer(async (req, res) => {
         bitableSkipExistingOnStart: config.bitable.skipExistingOnStart,
         bitableTriggerSourceNames: config.bitable.triggerSourceNames,
         bitableLookupSourceNames: config.bitable.lookupSourceNames,
+        recipientConfigBitableConfigured: Boolean(config.recipientConfig?.appToken && config.recipientConfig?.tableId),
+        recipientConfigBitable: config.recipientConfig ? {
+          name: config.recipientConfig.name,
+          appToken: config.recipientConfig.appToken ? `${config.recipientConfig.appToken.slice(0, 6)}...${config.recipientConfig.appToken.slice(-4)}` : "",
+          tableId: config.recipientConfig.tableId
+        } : null,
         approvalSyncConfigured: Boolean(config.approval.bomApprovalCodes.length),
         approvalSyncLookbackMinutes: config.approval.syncLookbackMinutes,
         approvalQueryStartLookbackMinutes: config.approval.queryStartLookbackMinutes,

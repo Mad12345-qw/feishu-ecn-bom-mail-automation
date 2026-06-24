@@ -20,6 +20,8 @@ services:
         sync: false
       - key: CONTACT_EMAIL_MAP
         sync: false
+      - key: RECIPIENT_CONFIG_BITABLE
+        sync: false
       - key: INCLUDE_DYNAMIC_RECIPIENTS
         value: "true"
       - key: READY_STATUS_VALUES

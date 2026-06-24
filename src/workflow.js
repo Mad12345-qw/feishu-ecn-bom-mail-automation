@@ -8,6 +8,10 @@ const recordStatusByKey = new Map();
 const approvalFormFieldCache = new Map();
 const contactEmailCache = new Map();
 const serviceStartedAt = Date.now();
+let recipientConfigCache = {
+  expiresAt: 0,
+  value: null
+};
 
 function getField(source, key) {
   const configured = config.fieldMapping[key] || key;
@@ -50,17 +54,85 @@ function assertAllowedRecipients(to, cc) {
   }
 }
 
-export function routeByAssemblyFactory(record) {
+async function getRecipientConfigFromBitable() {
+  const source = config.recipientConfig;
+  if (!source?.appToken || !source?.tableId) return null;
+
+  const now = Date.now();
+  if (recipientConfigCache.expiresAt > now) {
+    return recipientConfigCache.value;
+  }
+
+  try {
+    const records = await listBitableRecords(source);
+    const parsed = parseRecipientConfigRecords(records);
+    recipientConfigCache = {
+      expiresAt: now + 60_000,
+      value: parsed
+    };
+    return parsed;
+  } catch {
+    recipientConfigCache = {
+      expiresAt: now + 30_000,
+      value: null
+    };
+    return null;
+  }
+}
+
+function parseRecipientConfigRecords(records) {
+  const fixedRecipients = [];
+  const assemblyFactories = {};
+
+  for (const record of records || []) {
+    const fields = record.fields || {};
+    const enabled = valueToText(fields["启用"]).trim();
+    if (enabled && !["是", "启用", "true", "yes", "1"].includes(enabled.toLowerCase())) continue;
+
+    const type = valueToText(fields["收件类型"]).trim();
+    const factory = valueToText(fields["组装厂"]).trim();
+    const emails = normalizeEmailList(extractEmails(fields["邮箱"]));
+    if (!type || !emails.length) continue;
+
+    if (type.includes("固定")) {
+      fixedRecipients.push(...emails);
+      continue;
+    }
+
+    if (type.includes("工厂") && factory) {
+      if (!assemblyFactories[factory]) assemblyFactories[factory] = { to: [], cc: [], enabled: true };
+      assemblyFactories[factory].to.push(...emails);
+    }
+  }
+
+  const normalizedFactories = {};
+  for (const [factory, route] of Object.entries(assemblyFactories)) {
+    normalizedFactories[factory] = {
+      ...route,
+      to: normalizeEmailList(route.to),
+      cc: normalizeEmailList(route.cc)
+    };
+  }
+
+  if (!fixedRecipients.length && !Object.keys(normalizedFactories).length) return null;
+  return {
+    fixedRecipients: normalizeEmailList(fixedRecipients),
+    assemblyFactories: normalizedFactories
+  };
+}
+
+export function routeByAssemblyFactory(record, recipientConfig = null) {
   const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
   if (!assemblyFactories.length) {
     return { ok: false, reason: "缺少组装厂字段" };
   }
 
+  const assemblyFactoryRoutes = recipientConfig?.assemblyFactories || config.assemblyFactories;
   const missing = [];
   const to = [];
   const cc = [];
   for (const assemblyFactory of assemblyFactories) {
-    const route = config.assemblyFactories[assemblyFactory];
+    const route = assemblyFactoryRoutes[assemblyFactory];
     if (!route || route.enabled === false) {
       missing.push(assemblyFactory);
       continue;
@@ -88,6 +160,7 @@ export function routeByAssemblyFactory(record) {
 }
 
 export async function buildRecipientRoute(record) {
+  const recipientConfig = await getRecipientConfigFromBitable();
   const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
   if (!assemblyFactories.length) {
     return { ok: false, reason: "缺少组装厂字段" };
@@ -100,7 +173,7 @@ export async function buildRecipientRoute(record) {
     cc: []
   };
   if (config.includeFactoryRecipients) {
-    factoryRoute = routeByAssemblyFactory(record);
+    factoryRoute = routeByAssemblyFactory(record, recipientConfig);
     if (!factoryRoute.ok) return factoryRoute;
   }
 
@@ -108,7 +181,7 @@ export async function buildRecipientRoute(record) {
     ? await resolveDynamicRecipientEmails(record)
     : { emails: [], errors: [] };
   const dynamicRecipients = normalizeEmailList(dynamicResult.emails);
-  const fixedRecipients = normalizeEmailList(config.fixedRecipients);
+  const fixedRecipients = normalizeEmailList(recipientConfig?.fixedRecipients || config.fixedRecipients);
   const factoryRecipients = config.includeFactoryRecipients ? normalizeEmailList(factoryRoute.to) : [];
   const cc = normalizeEmailList(factoryRoute.cc);
   const to = normalizeEmailList([...fixedRecipients, ...dynamicRecipients, ...factoryRecipients]);
