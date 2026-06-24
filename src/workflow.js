@@ -868,9 +868,10 @@ async function queryApprovalInstances({ approvalCode, startTimeFrom, startTimeTo
     approval_code: approvalCode,
     instance_start_time_from: String(startTimeFrom),
     instance_start_time_to: String(startTimeTo),
+    page_size: 100,
     locale: "zh-CN"
   };
-  const data = await feishuApi("/approval/v4/instances/query?page_size=100", {
+  const data = await feishuApi("/approval/v4/instances/query", {
     method: "POST",
     body: JSON.stringify(body)
   });
