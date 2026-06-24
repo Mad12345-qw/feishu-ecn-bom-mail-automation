@@ -524,9 +524,10 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
     return { status: "blocked", reason: "Missing instanceCode" };
   }
 
-  const [approvalRecord, lookupRecords] = await Promise.all([
+  const [approvalRecord, lookupRecords, triggerRecords] = await Promise.all([
     fetchApprovalInstanceRecord(instanceCode),
-    listConfiguredLookupRecords()
+    listConfiguredLookupRecords(),
+    listConfiguredTriggerRecords()
   ]);
   if (!isConfiguredBomApproval(approvalRecord)) {
     return {
@@ -586,10 +587,11 @@ export async function sendConfiguredApprovalInstance({ instanceCode = "", force 
     }
   }
 
-  const enrichedFields = await enrichTriggerRecord(approvalRecord.fields, lookupRecords);
+  const approvalBaseFields = await mergeApprovalWithMatchingTriggerFields(approvalRecord, triggerRecords);
+  const enrichedFields = await enrichTriggerRecord(approvalBaseFields, lookupRecords);
   const result = await processBusinessRecord(enrichedFields, {
     readinessRecord: approvalRecord.fields,
-    routeRecord: approvalRecord.fields
+    routeRecord: enrichedFields
   });
   if (result.status === "sent") {
     const sentState = {
@@ -659,6 +661,19 @@ async function listConfiguredLookupRecords() {
     })));
   }
   return lookupRecords;
+}
+
+async function listConfiguredTriggerRecords() {
+  const triggerRecords = [];
+  for (const source of config.bitable.sources.filter(isTriggerSource)) {
+    const items = await listBitableRecords(source);
+    triggerRecords.push(...items.map((item) => ({
+      source,
+      recordId: item.record_id || item.id || "",
+      fields: item.fields || {}
+    })));
+  }
+  return triggerRecords;
 }
 
 async function listBitableRecords(source) {
@@ -841,6 +856,43 @@ async function enrichTriggerRecord(triggerFields, lookupRecords) {
     __lookupSourceIDs: lookupSourceIds,
     ...enrichedTriggerFields
   };
+}
+
+async function mergeApprovalWithMatchingTriggerFields(approvalRecord, triggerRecords) {
+  const matched = findMatchingTriggerRecordForApproval(approvalRecord, triggerRecords);
+  if (!matched) return approvalRecord.fields;
+
+  const triggerFields = await enrichFieldsFromApprovalForm(matched.fields || {});
+  return {
+    ...approvalRecord.fields,
+    ...triggerFields,
+    SourceID: approvalRecord.fields?.SourceID || triggerFields.SourceID || "",
+    "申请状态": approvalRecord.fields?.["申请状态"] || triggerFields["申请状态"] || "",
+    "申请编号": approvalRecord.fields?.["申请编号"] || triggerFields["申请编号"] || approvalRecord.serialNumber || "",
+    "发起时间": approvalRecord.fields?.["发起时间"] || triggerFields["发起时间"] || "",
+    "完成时间": approvalRecord.fields?.["完成时间"] || triggerFields["完成时间"] || "",
+    "审批流程": approvalRecord.fields?.["审批流程"] || triggerFields["审批流程"] || "",
+    __matchedTriggerSourceID: getBitableSourceId(matched.source),
+    __matchedTriggerRecordID: matched.recordId
+  };
+}
+
+function findMatchingTriggerRecordForApproval(approvalRecord, triggerRecords) {
+  const serialNumber = normalizeBusinessSerialNumber(
+    approvalRecord.serialNumber || approvalRecord.fields?.["申请编号"] || ""
+  );
+  if (!serialNumber) return null;
+
+  return triggerRecords.find((record) => {
+    const fields = record.fields || {};
+    const recordSerialNumber = normalizeBusinessSerialNumber(
+      fields["申请编号"]
+      || getField(fields, "applicationNo")
+      || fields["审批编号"]
+      || fields["单号"]
+    );
+    return recordSerialNumber === serialNumber;
+  }) || null;
 }
 
 async function enrichFieldsFromApprovalForm(fields) {
@@ -1963,7 +2015,10 @@ async function resolveDynamicRecipientEmails(record) {
     ...getFieldValues(record, "initiator"),
     ...getFieldValues(record, "projectManager")
   ];
-  const emails = values.flatMap(extractEmails);
+  const emails = [
+    ...values.flatMap(extractEmails),
+    ...values.flatMap(extractMappedContactEmails)
+  ];
   const errors = [];
   for (const ref of extractContactRefs(values)) {
     try {
@@ -1974,6 +2029,28 @@ async function resolveDynamicRecipientEmails(record) {
     }
   }
   return { emails: normalizeEmailList(emails), errors };
+}
+
+function extractMappedContactEmails(value) {
+  if (value === undefined || value === null || value === "") return [];
+  if (Array.isArray(value)) return value.flatMap(extractMappedContactEmails);
+  if (typeof value === "object") {
+    const directValues = [
+      value.user_id,
+      value.open_id,
+      value.union_id,
+      value.name,
+      value.text,
+      value.value,
+      value.title,
+      value.en_name
+    ];
+    return [
+      ...directValues.map(getMappedContactEmail).filter(Boolean),
+      ...Object.values(value).flatMap(extractMappedContactEmails)
+    ];
+  }
+  return [getMappedContactEmail(value)].filter(Boolean);
 }
 
 function extractContactRefs(value) {
