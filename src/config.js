@@ -97,6 +97,26 @@ function parseFactoryRecipients(value, fallback = {}) {
     : { routes: fallback, source: "config" };
 }
 
+function parseEmailMap(value) {
+  const raw = String(value || "").trim();
+  const map = {};
+  if (!raw) return map;
+
+  for (const entry of raw.split(/[;；\n\r]+/)) {
+    const item = entry.trim();
+    if (!item) continue;
+    const idx = item.indexOf("=");
+    if (idx <= 0) continue;
+    const key = item.slice(0, idx).trim();
+    const email = item.slice(idx + 1).trim().toLowerCase();
+    if (key && /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)) {
+      map[key] = email;
+    }
+  }
+
+  return map;
+}
+
 loadDotEnv();
 
 const assemblyFactoriesConfig = parseFactoryRecipients(
@@ -133,7 +153,8 @@ export const config = {
   approval: {
     bomApprovalCodes: parseTextList(process.env.FEISHU_BOM_APPROVAL_CODES, []),
     bomApprovalNames: parseTextList(process.env.FEISHU_BOM_APPROVAL_NAMES, ["BOM释放审批"]),
-    syncLookbackMinutes: parseNumber(process.env.APPROVAL_SYNC_LOOKBACK_MINUTES, 30)
+    syncLookbackMinutes: parseNumber(process.env.APPROVAL_SYNC_LOOKBACK_MINUTES, 30),
+    queryStartLookbackMinutes: parseNumber(process.env.APPROVAL_QUERY_START_LOOKBACK_MINUTES, 43200)
   },
   safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
   emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),
@@ -142,6 +163,7 @@ export const config = {
   readyStatusValues: parseTextList(process.env.READY_STATUS_VALUES, ["已通过", "审批通过", "完成", "已完成", "已发布"]),
   fixedRecipients: parseCsvList(process.env.FIXED_RECIPIENTS),
   testRecipients: parseCsvList(process.env.TEST_RECIPIENTS),
+  contactEmailMap: parseEmailMap(process.env.CONTACT_EMAIL_MAP || process.env.DYNAMIC_RECIPIENT_EMAIL_MAP),
   assemblyFactories: assemblyFactoriesConfig.routes,
   assemblyFactoriesSource: assemblyFactoriesConfig.source,
   fieldMapping: readJson("config/field-mapping.json", {})

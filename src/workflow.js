@@ -34,7 +34,10 @@ function getFieldValues(source, key) {
 }
 
 function normalizeEmailList(items) {
-  return [...new Set(items.map((item) => String(item).trim().toLowerCase()).filter(Boolean))];
+  return [...new Set(items
+    .filter((item) => item !== undefined && item !== null)
+    .map((item) => String(item).trim().toLowerCase())
+    .filter((email) => /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)))];
 }
 
 function assertAllowedRecipients(to, cc) {
@@ -359,6 +362,10 @@ export async function syncConfiguredApprovalInstances() {
 
   const now = Date.now();
   const from = now - Math.max(1, config.approval.syncLookbackMinutes) * 60 * 1000;
+  const queryStartFrom = now - Math.max(
+    Math.max(1, config.approval.syncLookbackMinutes),
+    Math.max(1, config.approval.queryStartLookbackMinutes || 0)
+  ) * 60 * 1000;
   const sources = [];
   const results = [];
 
@@ -366,7 +373,7 @@ export async function syncConfiguredApprovalInstances() {
     try {
       const instances = await queryApprovalInstances({
         approvalCode,
-        startTimeFrom: from,
+        startTimeFrom: queryStartFrom,
         startTimeTo: now
       });
       const sourceResults = [];
@@ -377,6 +384,17 @@ export async function syncConfiguredApprovalInstances() {
             serialNumber: instance.serialNumber,
             status: "skipped_not_approved",
             approvalStatus: instance.status
+          });
+          continue;
+        }
+        const completionWindow = getApprovalCompletionWindowState(instance, from);
+        if (!completionWindow.ok) {
+          sourceResults.push({
+            instanceCode: instance.instanceCode,
+            serialNumber: instance.serialNumber,
+            status: completionWindow.status,
+            approvalStatus: instance.status,
+            endTime: instance.endTime
           });
           continue;
         }
@@ -412,6 +430,17 @@ export async function syncConfiguredApprovalInstances() {
     sources,
     results
   };
+}
+
+function getApprovalCompletionWindowState(instance, completedAfter) {
+  const endTime = Number(instance.endTime || 0);
+  if (!Number.isFinite(endTime) || endTime <= 0) {
+    return { ok: false, status: "skipped_missing_completion_time" };
+  }
+  if (endTime < completedAfter) {
+    return { ok: false, status: "skipped_outside_completion_window" };
+  }
+  return { ok: true, status: "inside_completion_window" };
 }
 
 export async function sendConfiguredBitableRecord({ sourceName = "", recordId = "", force = false } = {}) {
@@ -864,18 +893,34 @@ async function fetchApprovalInstanceRecord(instanceCode) {
 }
 
 async function queryApprovalInstances({ approvalCode, startTimeFrom, startTimeTo }) {
-  const body = {
-    approval_code: approvalCode,
-    instance_start_time_from: String(startTimeFrom),
-    instance_start_time_to: String(startTimeTo),
-    page_size: 100,
-    locale: "zh-CN"
-  };
-  const data = await feishuApi("/approval/v4/instances/query", {
-    method: "POST",
-    body: JSON.stringify(body)
-  });
-  const instances = data.data?.instance_list || [];
+  const instances = [];
+  let pageToken = "";
+
+  for (let page = 0; page < 20; page += 1) {
+    const body = {
+      approval_code: approvalCode,
+      instance_start_time_from: String(startTimeFrom),
+      instance_start_time_to: String(startTimeTo),
+      page_size: 100,
+      locale: "zh-CN",
+      ...(pageToken ? { page_token: pageToken } : {})
+    };
+    const data = await feishuApi("/approval/v4/instances/query", {
+      method: "POST",
+      body: JSON.stringify(body)
+    });
+    const pageInstances = data.data?.instance_list || [];
+    instances.push(...pageInstances);
+    const nextPageToken = data.data?.page_token
+      || data.data?.pageToken
+      || data.data?.next_page_token
+      || data.data?.nextPageToken
+      || "";
+    const hasMore = Boolean(data.data?.has_more || data.data?.hasMore || nextPageToken);
+    if (!hasMore || !nextPageToken) break;
+    pageToken = nextPageToken;
+  }
+
   return instances.map(normalizeQueriedApprovalInstance).filter((item) => item.instanceCode);
 }
 
@@ -948,8 +993,18 @@ function parseApprovalFieldListRows(value) {
 
 function getApprovalItemValue(item) {
   if (item?.type === "connect" && item?.ext?.serialIDs) return item.ext.serialIDs;
+  if (item?.type === "contact") return getApprovalContactValue(item);
   if (item?.option?.text) return item.option.text;
   return item?.value ?? "";
+}
+
+function getApprovalContactValue(item) {
+  const userIds = Array.isArray(item.value) ? item.value : [item.value].filter(Boolean);
+  const openIds = Array.isArray(item.open_ids) ? item.open_ids : [];
+  return userIds.map((userId, index) => ({
+    user_id: userId,
+    open_id: openIds[index] || ""
+  }));
 }
 
 function getApprovalAttachmentValue(item) {
@@ -1868,7 +1923,7 @@ function getRecordBusinessTimestamp(record) {
 function isReadyStatus(statusText) {
   const text = String(statusText || "").trim();
   if (!text) return false;
-  return config.readyStatusValues.some((status) => text === status || text.includes(status));
+  return config.readyStatusValues.some((status) => text === status);
 }
 
 function valueToText(value) {
@@ -1932,9 +1987,21 @@ async function resolveContactEmail(ref) {
     `/contact/v3/users/${encodeURIComponent(ref.id)}?user_id_type=${encodeURIComponent(ref.idType)}`
   );
   const user = data.data?.user || data.data || {};
-  const email = normalizeEmailList([user.email, user.enterprise_email])[0] || "";
+  const email = normalizeEmailList([
+    user.email,
+    user.enterprise_email,
+    getMappedContactEmail(ref.id),
+    getMappedContactEmail(user.user_id),
+    getMappedContactEmail(user.open_id),
+    getMappedContactEmail(user.union_id)
+  ])[0] || "";
   contactEmailCache.set(cacheKey, email);
   return email;
+}
+
+function getMappedContactEmail(id) {
+  const key = String(id || "").trim();
+  return key ? config.contactEmailMap[key] || "" : "";
 }
 
 function maskContactId(id) {

@@ -309,6 +309,7 @@ const server = http.createServer(async (req, res) => {
         bitableLookupSourceNames: config.bitable.lookupSourceNames,
         approvalSyncConfigured: Boolean(config.approval.bomApprovalCodes.length),
         approvalSyncLookbackMinutes: config.approval.syncLookbackMinutes,
+        approvalQueryStartLookbackMinutes: config.approval.queryStartLookbackMinutes,
         fieldMapping: {
           assemblyFactory: config.fieldMapping.assemblyFactory,
           bomAttachments: config.fieldMapping.bomAttachments,
@@ -316,6 +317,7 @@ const server = http.createServer(async (req, res) => {
           changeDescription: config.fieldMapping.changeDescription
         },
         fixedRecipientCount: config.fixedRecipients.length,
+        contactEmailMapCount: Object.keys(config.contactEmailMap || {}).length,
         includeDynamicRecipients: config.includeDynamicRecipients,
         includeFactoryRecipients: config.includeFactoryRecipients,
         factoryRecipientSource: config.assemblyFactoriesSource,
