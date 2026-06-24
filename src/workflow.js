@@ -1859,12 +1859,22 @@ function parseApprovalForm(form) {
 function getApprovalAttachmentNames(item, count) {
   const fallback = item.name || "attachment";
   if (Array.isArray(item.ext)) {
-    return item.ext.map((name) => valueToText(name) || fallback);
+    const names = item.ext.flatMap((name) => splitAttachmentNameList(valueToText(name)));
+    return names.length ? names : Array.from({ length: count }, (_, index) => count > 1 ? `${fallback}-${index + 1}` : fallback);
   }
   const ext = valueToText(item.ext).trim();
   if (!ext) return Array.from({ length: count }, (_, index) => count > 1 ? `${fallback}-${index + 1}` : fallback);
+  const names = splitAttachmentNameList(ext);
+  if (names.length >= count) return names.slice(0, count);
   if (count <= 1) return [ext];
   return Array.from({ length: count }, (_, index) => `${ext}-${index + 1}`);
+}
+
+function splitAttachmentNameList(value) {
+  return String(value || "")
+    .split(/[,，\n\r]+/)
+    .map((name) => name.trim())
+    .filter(Boolean);
 }
 
 async function syncMailToFeishuGroup({ record, route, subject, attachments }) {
