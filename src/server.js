@@ -1,7 +1,7 @@
 import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
-import { config, missingRequiredConfig } from "./config.js";
+import { config, configQualityIssues, missingRequiredConfig } from "./config.js";
 import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
 import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processApprovalInstanceEvent, processBusinessRecord, sendConfiguredApprovalInstance, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredApprovalInstances, syncConfiguredBitableRecords } from "./workflow.js";
 
@@ -290,10 +290,13 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
+      const envQualityIssues = configQualityIssues();
       return sendJson(res, 200, {
         ok: true,
         service: "feishu-ecn-bom-mail-automation",
         missingConfig: missingRequiredConfig(),
+        envQualityOk: envQualityIssues.length === 0,
+        envQualityIssues,
         safeTestMode: config.safeTestMode,
         emailDryRun: config.emailDryRun,
         bitableConfigured: Boolean(config.bitable.sources.length),
@@ -326,6 +329,7 @@ const server = http.createServer(async (req, res) => {
         contactEmailMapCount: Object.keys(config.contactEmailMap || {}).length,
         includeDynamicRecipients: config.includeDynamicRecipients,
         includeFactoryRecipients: config.includeFactoryRecipients,
+        senderDisplayName: config.feishu.senderDisplayName,
         factoryRecipientSource: config.assemblyFactoriesSource,
         factoryRecipientNames: Object.keys(config.assemblyFactories),
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),

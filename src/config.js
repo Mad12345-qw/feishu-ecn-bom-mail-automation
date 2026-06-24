@@ -4,6 +4,30 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const rootDir = path.resolve(__dirname, "..");
+const DEFAULT_SENDER_DISPLAY_NAME = "BOM\u91ca\u653e\u901a\u77e5";
+const DEFAULT_RECIPIENT_CONFIG_NAME = "\u90ae\u4ef6\u6536\u4ef6\u4eba\u914d\u7f6e";
+const CONFIG_AUDIT_KEYS = [
+  "FEISHU_APP_ID",
+  "FEISHU_APP_SECRET",
+  "FEISHU_VERIFICATION_TOKEN",
+  "FEISHU_SENDER_MAILBOX_ID",
+  "FEISHU_SENDER_DISPLAY_NAME",
+  "FEISHU_SYNC_CHAT_ID",
+  "FEISHU_BOM_APPROVAL_CODES",
+  "FEISHU_BOM_APPROVAL_NAMES",
+  "SAFE_TEST_MODE",
+  "EMAIL_DRY_RUN",
+  "INCLUDE_DYNAMIC_RECIPIENTS",
+  "INCLUDE_FACTORY_RECIPIENTS",
+  "READY_STATUS_VALUES",
+  "FIXED_RECIPIENTS",
+  "TEST_RECIPIENTS",
+  "FACTORY_RECIPIENTS",
+  "RECIPIENT_CONFIG_BITABLE",
+  "UPSTASH_REDIS_REST_URL",
+  "UPSTASH_REDIS_REST_TOKEN",
+  "UPSTASH_FEISHU_USER_TOKEN_KEY"
+];
 
 function loadDotEnv() {
   const envPath = path.join(rootDir, ".env");
@@ -52,6 +76,16 @@ function parseNumber(value, fallback) {
   return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function hasSuspiciousText(value) {
+  const text = String(value || "");
+  return /\?{2,}/.test(text) || [...text].some((char) => char.charCodeAt(0) === 0xfffd);
+}
+
+function cleanDisplayText(value, fallback) {
+  const text = String(value || "").trim();
+  return text && !hasSuspiciousText(text) ? text : fallback;
+}
+
 function parseBitableSources() {
   const rawSources = String(process.env.BITABLE_SOURCES || "").trim();
   if (rawSources) {
@@ -77,12 +111,12 @@ function parseBitableSource(value) {
   const raw = String(value || "").trim();
   if (raw) {
     const [appToken, tableId, name] = raw.split("|").map((part) => part.trim());
-    return appToken && tableId ? { appToken, tableId, name: name || "recipient-config" } : null;
+    return appToken && tableId ? { appToken, tableId, name: cleanDisplayText(name, DEFAULT_RECIPIENT_CONFIG_NAME) } : null;
   }
 
   const appToken = process.env.RECIPIENT_CONFIG_APP_TOKEN || "";
   const tableId = process.env.RECIPIENT_CONFIG_TABLE_ID || "";
-  return appToken && tableId ? { appToken, tableId, name: "recipient-config" } : null;
+  return appToken && tableId ? { appToken, tableId, name: DEFAULT_RECIPIENT_CONFIG_NAME } : null;
 }
 
 function parseFactoryRecipients(value, fallback = {}) {
@@ -144,7 +178,7 @@ export const config = {
     appSecret: process.env.FEISHU_APP_SECRET || "",
     verificationToken: process.env.FEISHU_VERIFICATION_TOKEN || "",
     senderMailboxId: process.env.FEISHU_SENDER_MAILBOX_ID || "",
-    senderDisplayName: process.env.FEISHU_SENDER_DISPLAY_NAME || "BOM释放通知",
+    senderDisplayName: cleanDisplayText(process.env.FEISHU_SENDER_DISPLAY_NAME, DEFAULT_SENDER_DISPLAY_NAME),
     syncChatId: process.env.FEISHU_SYNC_CHAT_ID || ""
   },
   upstash: {
@@ -188,4 +222,35 @@ export function missingRequiredConfig() {
   if (!config.feishu.appSecret) missing.push("FEISHU_APP_SECRET");
   if (!config.feishu.senderMailboxId) missing.push("FEISHU_SENDER_MAILBOX_ID");
   return missing;
+}
+
+export function configQualityIssues() {
+  const issues = [];
+  for (const key of CONFIG_AUDIT_KEYS) {
+    const value = process.env[key] || "";
+    if (value && hasSuspiciousText(value)) {
+      issues.push({
+        severity: "error",
+        key,
+        issue: "suspicious_encoding_or_question_marks"
+      });
+    }
+  }
+
+  for (const key of ["SAFE_TEST_MODE", "EMAIL_DRY_RUN", "INCLUDE_DYNAMIC_RECIPIENTS", "INCLUDE_FACTORY_RECIPIENTS"]) {
+    const value = process.env[key] || "";
+    if (value && !/^(true|false)$/i.test(value)) {
+      issues.push({ severity: "error", key, issue: "invalid_boolean" });
+    }
+  }
+
+  if (process.env.RECIPIENT_CONFIG_BITABLE && !config.recipientConfig) {
+    issues.push({ severity: "error", key: "RECIPIENT_CONFIG_BITABLE", issue: "invalid_bitable_source_format" });
+  }
+
+  if (config.upstash.redisRestUrl && !/^https:\/\//i.test(config.upstash.redisRestUrl)) {
+    issues.push({ severity: "error", key: "UPSTASH_REDIS_REST_URL", issue: "not_https_url" });
+  }
+
+  return issues;
 }
