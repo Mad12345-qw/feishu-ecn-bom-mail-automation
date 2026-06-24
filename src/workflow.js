@@ -878,6 +878,13 @@ async function mergeApprovalWithMatchingTriggerFields(approvalRecord, triggerRec
 }
 
 function findMatchingTriggerRecordForApproval(approvalRecord, triggerRecords) {
+  const instanceCode = String(approvalRecord.instanceCode || approvalRecord.fields?.SourceID || "").trim();
+  const matchedBySourceId = triggerRecords.find((record) => {
+    const sourceInstanceCode = extractApprovalInstanceCodeFromSourceId(record.fields?.SourceID || "");
+    return sourceInstanceCode && instanceCode && sourceInstanceCode.toLowerCase() === instanceCode.toLowerCase();
+  });
+  if (matchedBySourceId) return matchedBySourceId;
+
   const serialNumber = normalizeBusinessSerialNumber(
     approvalRecord.serialNumber || approvalRecord.fields?.["申请编号"] || ""
   );
@@ -2060,15 +2067,23 @@ function extractContactRefs(value) {
     const refs = [];
     if (value.user_id) refs.push({ idType: "user_id", id: String(value.user_id) });
     if (value.open_id) refs.push({ idType: "open_id", id: String(value.open_id) });
+    if (value.id) refs.push(classifyContactId(value.id));
     for (const [key, child] of Object.entries(value)) {
-      if (key === "user_id" || key === "open_id" || key === "email") continue;
+      if (key === "user_id" || key === "open_id" || key === "email" || key === "id") continue;
       refs.push(...extractContactRefs(child));
     }
     return refs;
   }
   const text = String(value).trim();
   if (!text || text.includes("@") || /^https?:\/\//i.test(text)) return [];
-  return /^[A-Za-z0-9_-]{4,64}$/.test(text) ? [{ idType: "user_id", id: text }] : [];
+  return /^[A-Za-z0-9_-]{4,128}$/.test(text) ? [classifyContactId(text)] : [];
+}
+
+function classifyContactId(value) {
+  const id = String(value || "").trim();
+  return /^ou_/i.test(id)
+    ? { idType: "open_id", id }
+    : { idType: "user_id", id };
 }
 
 async function resolveContactEmail(ref) {
