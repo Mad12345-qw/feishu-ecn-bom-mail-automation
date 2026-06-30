@@ -87,6 +87,60 @@ function appendLog(entry) {
   console.log(JSON.stringify(payload));
 }
 
+const approvalSyncState = {
+  running: false,
+  startedAt: null,
+  finishedAt: null,
+  lastStatus: null,
+  lastSummary: null,
+  lastError: null
+};
+
+function publicApprovalSyncState() {
+  return {
+    running: approvalSyncState.running,
+    startedAt: approvalSyncState.startedAt,
+    finishedAt: approvalSyncState.finishedAt,
+    lastStatus: approvalSyncState.lastStatus,
+    lastSummary: approvalSyncState.lastSummary,
+    lastError: approvalSyncState.lastError,
+    elapsedSeconds: approvalSyncState.running && approvalSyncState.startedAt
+      ? Math.round((Date.now() - Date.parse(approvalSyncState.startedAt)) / 1000)
+      : 0
+  };
+}
+
+function startApprovalSyncInBackground(trigger = "cron") {
+  if (approvalSyncState.running) {
+    return { started: false, state: publicApprovalSyncState() };
+  }
+
+  approvalSyncState.running = true;
+  approvalSyncState.startedAt = new Date().toISOString();
+  approvalSyncState.finishedAt = null;
+  approvalSyncState.lastStatus = "running";
+  approvalSyncState.lastError = null;
+
+  setImmediate(async () => {
+    try {
+      const result = await syncConfiguredApprovalInstances();
+      const summary = summarizeSyncResult(result);
+      approvalSyncState.lastStatus = result.status || "synced";
+      approvalSyncState.lastSummary = summary;
+      appendLog({ type: "approval_sync", trigger, mode: "background", result: summary });
+    } catch (error) {
+      approvalSyncState.lastStatus = "failed";
+      approvalSyncState.lastError = error.message;
+      appendLog({ type: "approval_sync", trigger, mode: "background", error: error.message, stack: error.stack });
+    } finally {
+      approvalSyncState.running = false;
+      approvalSyncState.finishedAt = new Date().toISOString();
+    }
+  });
+
+  return { started: true, state: publicApprovalSyncState() };
+}
+
 function readRecentEvents() {
   const logPath = path.join(config.rootDir, "logs", "events.jsonl");
   if (!fs.existsSync(logPath)) return [];
@@ -176,6 +230,21 @@ async function handleApprovalSync(req, res, url) {
   const token = url.searchParams.get("token") || req.headers["x-debug-token"];
   if (!config.feishu.verificationToken || token !== config.feishu.verificationToken) {
     return sendJson(res, 403, { error: "forbidden" });
+  }
+
+  const waitForCompletion = url.searchParams.get("wait") === "true";
+  if (!waitForCompletion) {
+    const background = startApprovalSyncInBackground("cron");
+    const status = background.started ? "accepted" : "already_running";
+    appendLog({ type: "approval_sync_request", mode: "background", status, state: background.state });
+    return sendJson(res, 200, {
+      status,
+      mode: "background",
+      message: background.started
+        ? "Approval sync started in background. Cron can return immediately to avoid timeout."
+        : "Approval sync is already running. This cron tick was acknowledged without starting a duplicate run.",
+      state: background.state
+    });
   }
 
   const result = await syncConfiguredApprovalInstances();
@@ -333,6 +402,7 @@ const server = http.createServer(async (req, res) => {
         factoryRecipientSource: config.assemblyFactoriesSource,
         factoryRecipientNames: Object.keys(config.assemblyFactories),
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
+        approvalSyncState: publicApprovalSyncState(),
         userMailAuth: await getUserAuthStatus()
       });
     }
