@@ -121,13 +121,31 @@ function parseRecipientConfigRecords(records) {
   };
 }
 
+function mergeAssemblyFactoryRoutes(...sources) {
+  const merged = {};
+  for (const source of sources) {
+    for (const [factory, route] of Object.entries(source || {})) {
+      if (!factory || route?.enabled === false) continue;
+      if (!merged[factory]) merged[factory] = { to: [], cc: [], enabled: true };
+      merged[factory].to.push(...(route.to || []));
+      merged[factory].cc.push(...(route.cc || []));
+    }
+  }
+
+  for (const route of Object.values(merged)) {
+    route.to = normalizeEmailList(route.to);
+    route.cc = normalizeEmailList(route.cc);
+  }
+  return merged;
+}
+
 export function routeByAssemblyFactory(record, recipientConfig = null) {
   const assemblyFactories = normalizeFactoryNames(getField(record, "assemblyFactory"));
   if (!assemblyFactories.length) {
     return { ok: false, reason: "缺少组装厂字段" };
   }
 
-  const assemblyFactoryRoutes = recipientConfig?.assemblyFactories || config.assemblyFactories;
+  const assemblyFactoryRoutes = mergeAssemblyFactoryRoutes(config.assemblyFactories, recipientConfig?.assemblyFactories);
   const missing = [];
   const to = [];
   const cc = [];
@@ -181,7 +199,10 @@ export async function buildRecipientRoute(record) {
     ? await resolveDynamicRecipientEmails(record)
     : { emails: [], errors: [] };
   const dynamicRecipients = normalizeEmailList(dynamicResult.emails);
-  const fixedRecipients = normalizeEmailList(recipientConfig?.fixedRecipients || config.fixedRecipients);
+  const fixedRecipients = normalizeEmailList([
+    ...config.fixedRecipients,
+    ...(recipientConfig?.fixedRecipients || [])
+  ]);
   const factoryRecipients = config.includeFactoryRecipients ? normalizeEmailList(factoryRoute.to) : [];
   const cc = normalizeEmailList(factoryRoute.cc);
   const to = normalizeEmailList([...fixedRecipients, ...dynamicRecipients, ...factoryRecipients]);
