@@ -41,7 +41,18 @@ function normalizeEmailList(items) {
   return [...new Set(items
     .filter((item) => item !== undefined && item !== null)
     .map((item) => String(item).trim().toLowerCase())
-    .filter((email) => /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email)))];
+    .filter((email) => /^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(email))
+    .filter((email) => !isBlockedRecipientEmail(email)))];
+}
+
+function isBlockedRecipientEmail(email) {
+  const normalized = String(email || "").trim().toLowerCase();
+  if (!normalized.includes("@")) return false;
+  const domain = normalized.split("@").pop();
+  return config.blockedRecipientDomains.some((blockedDomain) => {
+    const blocked = String(blockedDomain || "").trim().toLowerCase().replace(/^@/, "");
+    return blocked && (domain === blocked || domain.endsWith(`.${blocked}`));
+  });
 }
 
 function assertAllowedRecipients(to, cc) {

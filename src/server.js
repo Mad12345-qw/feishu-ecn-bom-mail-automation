@@ -396,6 +396,7 @@ const server = http.createServer(async (req, res) => {
         },
         fixedRecipientCount: config.fixedRecipients.length,
         contactEmailMapCount: Object.keys(config.contactEmailMap || {}).length,
+        blockedRecipientDomains: config.blockedRecipientDomains,
         includeDynamicRecipients: config.includeDynamicRecipients,
         includeFactoryRecipients: config.includeFactoryRecipients,
         senderDisplayName: config.feishu.senderDisplayName,
