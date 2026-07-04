@@ -2,5 +2,6 @@ node_modules/
 .env
 logs/*.log
 logs/*.jsonl
+data/
 .DS_Store
 *.local
