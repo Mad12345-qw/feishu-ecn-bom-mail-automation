@@ -2,7 +2,7 @@ import http from "node:http";
 import fs from "node:fs";
 import path from "node:path";
 import { config, configQualityIssues, missingRequiredConfig } from "./config.js";
-import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuMail } from "./feishuClient.js";
+import { buildFeishuOAuthUrl, createOAuthState, exchangeOAuthCode, exportUserTokenForRenderEnv, getUserAuthStatus, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
 import { guardFeishuEventTriggerSource, isDuplicateEvent, mapFeishuEventToRecord, processApprovalInstanceEvent, processBusinessRecord, sendConfiguredApprovalInstance, sendConfiguredBitableRecord, summarizeFeishuEvent, syncConfiguredApprovalInstances, syncConfiguredBitableRecords } from "./workflow.js";
 
 function sendJson(res, statusCode, payload) {
@@ -96,6 +96,8 @@ const approvalSyncState = {
   lastError: null
 };
 
+const operationalAlertSentAt = new Map();
+
 function publicApprovalSyncState() {
   return {
     running: approvalSyncState.running,
@@ -155,6 +157,87 @@ function readRecentEvents() {
         return { raw: line };
       }
     });
+}
+
+function isMailAuthSendReady(userMailAuth) {
+  return Boolean(userMailAuth?.authorized && userMailAuth?.hasRefreshToken && userMailAuth?.refreshTokenValid);
+}
+
+async function sendOperationalAlert(key, text) {
+  if (!config.feishu.syncChatId) return { status: "skipped", reason: "FEISHU_SYNC_CHAT_ID not configured" };
+
+  const cooldownMs = Math.max(1, config.operations.alertCooldownMinutes) * 60 * 1000;
+  const now = Date.now();
+  const lastSentAt = operationalAlertSentAt.get(key) || 0;
+  if (now - lastSentAt < cooldownMs) {
+    return { status: "skipped", reason: "alert_cooldown" };
+  }
+
+  try {
+    const result = await sendFeishuChatText({
+      chatId: config.feishu.syncChatId,
+      text
+    });
+    operationalAlertSentAt.set(key, now);
+    appendLog({ type: "operational_alert", key, status: "sent" });
+    return { status: "sent", result };
+  } catch (error) {
+    appendLog({ type: "operational_alert", key, status: "failed", error: error.message });
+    return { status: "failed", error: error.message };
+  }
+}
+
+async function runOperationalSelfCheck({ notify = true } = {}) {
+  const envQualityIssues = configQualityIssues();
+  const missingConfig = missingRequiredConfig();
+  const userMailAuth = await getUserAuthStatus();
+  const approvalState = publicApprovalSyncState();
+  const issues = [];
+
+  if (missingConfig.length) {
+    issues.push(`缺少必要配置：${missingConfig.join(", ")}`);
+  }
+  if (envQualityIssues.length) {
+    issues.push(`环境变量质量异常：${envQualityIssues.map((item) => item.key).join(", ")}`);
+  }
+  if (!isMailAuthSendReady(userMailAuth)) {
+    issues.push("飞书发件邮箱授权不可用，需要重新授权。");
+  }
+  if (approvalState.lastStatus === "failed" || approvalState.lastStatus === "partial") {
+    issues.push(`最近一次审批同步状态异常：${approvalState.lastStatus}${approvalState.lastError ? `，${approvalState.lastError}` : ""}`);
+  }
+  if (approvalState.running && approvalState.elapsedSeconds > 300) {
+    issues.push(`审批同步运行时间超过 5 分钟：${approvalState.elapsedSeconds} 秒`);
+  }
+
+  const result = {
+    ok: issues.length === 0,
+    service: "feishu-ecn-bom-mail-automation",
+    checkedAt: new Date().toISOString(),
+    issues,
+    sendReady: isMailAuthSendReady(userMailAuth) && !config.emailDryRun && !config.safeTestMode,
+    safeTestMode: config.safeTestMode,
+    emailDryRun: config.emailDryRun,
+    userMailAuth,
+    approvalSyncState: approvalState
+  };
+
+  if (notify && issues.length) {
+    result.alert = await sendOperationalAlert(
+      `self_check:${issues.join("|")}`,
+      [
+        "BOM/ECN邮件自动化自检告警",
+        ...issues.map((issue) => `- ${issue}`),
+        "",
+        "影响：如涉及发件授权，自动邮件会暂停或发送失败。",
+        "处理：请管理员检查授权、环境变量或最近失败审批；已成功发送过的记录不会重复发送。",
+        `时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
+      ].join("\n")
+    );
+  }
+
+  appendLog({ type: "operational_self_check", ok: result.ok, issueCount: issues.length });
+  return result;
 }
 
 async function handleFeishuWebhook(req, res) {
@@ -360,6 +443,7 @@ const server = http.createServer(async (req, res) => {
 
     if (req.method === "GET" && url.pathname === "/health") {
       const envQualityIssues = configQualityIssues();
+      const userMailAuth = await getUserAuthStatus();
       return sendJson(res, 200, {
         ok: true,
         service: "feishu-ecn-bom-mail-automation",
@@ -403,8 +487,9 @@ const server = http.createServer(async (req, res) => {
         factoryRecipientSource: config.assemblyFactoriesSource,
         factoryRecipientNames: Object.keys(config.assemblyFactories),
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),
+        sendReady: isMailAuthSendReady(userMailAuth) && !config.emailDryRun && !config.safeTestMode,
         approvalSyncState: publicApprovalSyncState(),
-        userMailAuth: await getUserAuthStatus()
+        userMailAuth
       });
     }
 
@@ -430,6 +515,12 @@ const server = http.createServer(async (req, res) => {
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/sync/approvals") {
       return await handleApprovalSync(req, res, url);
+    }
+
+    if ((req.method === "GET" || req.method === "POST") && url.pathname === "/ops/self-check") {
+      if (!assertDebugToken(req, url)) return sendJson(res, 403, { error: "forbidden" });
+      const notify = url.searchParams.get("notify") !== "false";
+      return sendJson(res, 200, await runOperationalSelfCheck({ notify }));
     }
 
     if ((req.method === "GET" || req.method === "POST") && url.pathname === "/debug/send-test-mail") {

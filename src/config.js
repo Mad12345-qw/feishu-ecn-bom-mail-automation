@@ -27,7 +27,8 @@ const CONFIG_AUDIT_KEYS = [
   "RECIPIENT_CONFIG_BITABLE",
   "UPSTASH_REDIS_REST_URL",
   "UPSTASH_REDIS_REST_TOKEN",
-  "UPSTASH_FEISHU_USER_TOKEN_KEY"
+  "UPSTASH_FEISHU_USER_TOKEN_KEY",
+  "OP_ALERT_COOLDOWN_MINUTES"
 ];
 
 function loadDotEnv() {
@@ -203,6 +204,9 @@ export const config = {
     bomApprovalNames: parseTextList(process.env.FEISHU_BOM_APPROVAL_NAMES, ["BOM释放审批"]),
     syncLookbackMinutes: parseNumber(process.env.APPROVAL_SYNC_LOOKBACK_MINUTES, 30),
     queryStartLookbackMinutes: parseNumber(process.env.APPROVAL_QUERY_START_LOOKBACK_MINUTES, 43200)
+  },
+  operations: {
+    alertCooldownMinutes: parseNumber(process.env.OP_ALERT_COOLDOWN_MINUTES, 30)
   },
   safeTestMode: parseBoolean(process.env.SAFE_TEST_MODE, true),
   emailDryRun: parseBoolean(process.env.EMAIL_DRY_RUN, true),

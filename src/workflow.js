@@ -1,12 +1,13 @@
 import crypto from "node:crypto";
 import { config } from "./config.js";
-import { downloadDirectUrlAttachment, downloadFeishuMediaWithUserFallback, exportFeishuDriveFile, feishuApi, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
+import { downloadDirectUrlAttachment, downloadFeishuMediaWithUserFallback, exportFeishuDriveFile, feishuApi, getUserAuthStatus, sendFeishuChatText, sendFeishuMail } from "./feishuClient.js";
 
 const processedEventIds = new Set();
 const processedRecordFingerprints = new Set();
 const recordStatusByKey = new Map();
 const approvalFormFieldCache = new Map();
 const contactEmailCache = new Map();
+const operationalAlertSentAt = new Map();
 const serviceStartedAt = Date.now();
 let recipientConfigCache = {
   expiresAt: 0,
@@ -462,6 +463,36 @@ export async function syncConfiguredApprovalInstances() {
     return {
       status: "blocked",
       reason: "Missing FEISHU_BOM_APPROVAL_CODES"
+      };
+  }
+
+  const userMailAuth = await getUserAuthStatus();
+  if (!userMailAuth.authorized || !userMailAuth.hasRefreshToken || !userMailAuth.refreshTokenValid) {
+    const reason = "mail_user_authorization_invalid";
+    await sendOperationalAlert(
+      "mail_auth_invalid",
+      [
+        "BOM/ECN邮件自动化告警",
+        "问题：飞书发件邮箱授权已失效，当前自动邮件不会发送。",
+        "处理：请使用有公共发件邮箱权限的飞书账号重新打开授权链接完成授权。",
+        `时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
+      ].join("\n")
+    );
+    return {
+      status: "blocked",
+      reason,
+      sourceCount: config.approval.bomApprovalCodes.length,
+      processed: 0,
+      auth: {
+        authorized: userMailAuth.authorized,
+        hasRefreshToken: userMailAuth.hasRefreshToken,
+        accessTokenValid: userMailAuth.accessTokenValid,
+        refreshTokenValid: userMailAuth.refreshTokenValid,
+        persistentStoreConfigured: userMailAuth.persistentStoreConfigured,
+        persistentStore: userMailAuth.persistentStore
+      },
+      sources: [],
+      results: []
     };
   }
 
@@ -503,17 +534,41 @@ export async function syncConfiguredApprovalInstances() {
           });
           continue;
         }
-        const result = await sendConfiguredApprovalInstance({ instanceCode: instance.instanceCode });
-        sourceResults.push({
-          instanceCode: instance.instanceCode,
-          serialNumber: instance.serialNumber,
-          result
-        });
+        try {
+          const result = await sendConfiguredApprovalInstance({ instanceCode: instance.instanceCode });
+          sourceResults.push({
+            instanceCode: instance.instanceCode,
+            serialNumber: instance.serialNumber,
+            result
+          });
+        } catch (error) {
+          const failed = {
+            instanceCode: instance.instanceCode,
+            serialNumber: instance.serialNumber,
+            status: "send_failed",
+            approvalStatus: instance.status,
+            error: error.message
+          };
+          sourceResults.push(failed);
+          await sendOperationalAlert(
+            `approval_send_failed:${instance.serialNumber || instance.instanceCode}`,
+            [
+              "BOM/ECN邮件自动化告警",
+              "问题：有一条已通过审批发送失败，系统已跳过该条并继续处理其它审批。",
+              `审批编号：${instance.serialNumber || "未返回"}`,
+              `失败原因：${error.message}`,
+              "处理：请管理员核对该审批附件、收件人或手动补发；已成功发送过的记录不会重复发送。",
+              `时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
+            ].join("\n")
+          );
+        }
       }
+      const failedCount = sourceResults.filter((item) => item.status === "send_failed").length;
       sources.push({
         approvalCode: maskToken(approvalCode),
         total: instances.length,
         processed: sourceResults.filter((item) => item.result?.result?.status === "sent").length,
+        error: failedCount ? `${failedCount} approval item(s) failed` : undefined,
         results: sourceResults
       });
       results.push(...sourceResults.map((item) => ({ approvalCode: maskToken(approvalCode), ...item })));
@@ -535,6 +590,28 @@ export async function syncConfiguredApprovalInstances() {
     sources,
     results
   };
+}
+
+async function sendOperationalAlert(key, text) {
+  if (!config.feishu.syncChatId) return { status: "skipped", reason: "FEISHU_SYNC_CHAT_ID not configured" };
+
+  const cooldownMs = Math.max(1, config.operations.alertCooldownMinutes) * 60 * 1000;
+  const now = Date.now();
+  const lastSentAt = operationalAlertSentAt.get(key) || 0;
+  if (now - lastSentAt < cooldownMs) {
+    return { status: "skipped", reason: "alert_cooldown" };
+  }
+
+  try {
+    const result = await sendFeishuChatText({
+      chatId: config.feishu.syncChatId,
+      text
+    });
+    operationalAlertSentAt.set(key, now);
+    return { status: "sent", result };
+  } catch (error) {
+    return { status: "failed", error: error.message };
+  }
 }
 
 function getApprovalCompletionWindowState(instance, completedAfter) {
