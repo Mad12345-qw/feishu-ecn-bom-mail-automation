@@ -163,6 +163,15 @@ function isMailAuthSendReady(userMailAuth) {
   return Boolean(userMailAuth?.authorized && userMailAuth?.hasRefreshToken && userMailAuth?.refreshTokenValid);
 }
 
+function buildFeishuOAuthStartLine() {
+  if (!config.service.publicBaseUrl || !config.feishu.verificationToken) {
+    return "授权链接：请联系系统管理员获取。";
+  }
+  const url = new URL("/oauth/feishu/start", config.service.publicBaseUrl);
+  url.searchParams.set("token", config.feishu.verificationToken);
+  return `授权链接：${url.toString()}`;
+}
+
 async function sendOperationalAlert(key, text) {
   if (!config.feishu.syncChatId) return { status: "skipped", reason: "FEISHU_SYNC_CHAT_ID not configured" };
 
@@ -201,7 +210,7 @@ async function runOperationalSelfCheck({ notify = true } = {}) {
     issues.push(`环境变量质量异常：${envQualityIssues.map((item) => item.key).join(", ")}`);
   }
   if (!isMailAuthSendReady(userMailAuth)) {
-    issues.push("飞书发件邮箱授权不可用，需要重新授权。");
+    issues.push("飞书发件邮箱授权不可用，需要点击授权链接重新授权。");
   }
   if (approvalState.lastStatus === "failed" || approvalState.lastStatus === "partial") {
     issues.push(`最近一次审批同步状态异常：${approvalState.lastStatus}${approvalState.lastError ? `，${approvalState.lastError}` : ""}`);
@@ -229,10 +238,11 @@ async function runOperationalSelfCheck({ notify = true } = {}) {
         "BOM/ECN邮件自动化自检告警",
         ...issues.map((issue) => `- ${issue}`),
         "",
+        buildFeishuOAuthStartLine(),
         "影响：如涉及发件授权，自动邮件会暂停或发送失败。",
-        "处理：请管理员检查授权、环境变量或最近失败审批；已成功发送过的记录不会重复发送。",
+        "处理：如为授权问题，请使用有公共发件邮箱权限的飞书账号点击上方链接完成授权；已成功发送过的记录不会重复发送。",
         `时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
-      ].join("\n")
+      ].filter(Boolean).join("\n")
     );
   }
 
@@ -484,6 +494,7 @@ const server = http.createServer(async (req, res) => {
         includeDynamicRecipients: config.includeDynamicRecipients,
         includeFactoryRecipients: config.includeFactoryRecipients,
         senderDisplayName: config.feishu.senderDisplayName,
+        publicBaseUrlConfigured: Boolean(config.service.publicBaseUrl),
         factoryRecipientSource: config.assemblyFactoriesSource,
         factoryRecipientNames: Object.keys(config.assemblyFactories),
         feishuGroupSyncConfigured: Boolean(config.feishu.syncChatId),

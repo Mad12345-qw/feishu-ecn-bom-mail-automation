@@ -15,6 +15,7 @@ const CONFIG_AUDIT_KEYS = [
   "FEISHU_SYNC_CHAT_ID",
   "FEISHU_BOM_APPROVAL_CODES",
   "FEISHU_BOM_APPROVAL_NAMES",
+  "PUBLIC_BASE_URL",
   "SAFE_TEST_MODE",
   "EMAIL_DRY_RUN",
   "INCLUDE_DYNAMIC_RECIPIENTS",
@@ -187,6 +188,9 @@ export const config = {
     redisRestUrl: process.env.UPSTASH_REDIS_REST_URL || "",
     redisRestToken: process.env.UPSTASH_REDIS_REST_TOKEN || "",
     userTokenKey: process.env.UPSTASH_FEISHU_USER_TOKEN_KEY || "feishu:user-token"
+  },
+  service: {
+    publicBaseUrl: String(process.env.PUBLIC_BASE_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/+$/, "")
   },
   bitable: {
     appToken: process.env.BITABLE_APP_TOKEN || "",

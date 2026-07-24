@@ -474,9 +474,10 @@ export async function syncConfiguredApprovalInstances() {
       [
         "BOM/ECN邮件自动化告警",
         "问题：飞书发件邮箱授权已失效，当前自动邮件不会发送。",
-        "处理：请使用有公共发件邮箱权限的飞书账号重新打开授权链接完成授权。",
+        "处理：请使用有公共发件邮箱权限的飞书账号打开下面链接完成授权。",
+        buildFeishuOAuthStartLine(),
         `时间：${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
-      ].join("\n")
+      ].filter(Boolean).join("\n")
     );
     return {
       status: "blocked",
@@ -590,6 +591,15 @@ export async function syncConfiguredApprovalInstances() {
     sources,
     results
   };
+}
+
+function buildFeishuOAuthStartLine() {
+  if (!config.service.publicBaseUrl || !config.feishu.verificationToken) {
+    return "授权链接：请联系系统管理员获取。";
+  }
+  const url = new URL("/oauth/feishu/start", config.service.publicBaseUrl);
+  url.searchParams.set("token", config.feishu.verificationToken);
+  return `授权链接：${url.toString()}`;
 }
 
 async function sendOperationalAlert(key, text) {
