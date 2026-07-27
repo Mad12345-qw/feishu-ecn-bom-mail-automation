@@ -15,6 +15,10 @@ const CONFIG_AUDIT_KEYS = [
   "FEISHU_SYNC_CHAT_ID",
   "FEISHU_BOM_APPROVAL_CODES",
   "FEISHU_BOM_APPROVAL_NAMES",
+  "APPROVAL_SYNC_LOOKBACK_MINUTES",
+  "APPROVAL_QUERY_START_LOOKBACK_MINUTES",
+  "APPROVAL_RECOVERY_OVERLAP_MINUTES",
+  "APPROVAL_QUERY_MAX_PAGES",
   "PUBLIC_BASE_URL",
   "SAFE_TEST_MODE",
   "EMAIL_DRY_RUN",
@@ -207,7 +211,9 @@ export const config = {
     bomApprovalCodes: parseTextList(process.env.FEISHU_BOM_APPROVAL_CODES, []),
     bomApprovalNames: parseTextList(process.env.FEISHU_BOM_APPROVAL_NAMES, ["BOM释放审批"]),
     syncLookbackMinutes: parseNumber(process.env.APPROVAL_SYNC_LOOKBACK_MINUTES, 30),
-    queryStartLookbackMinutes: parseNumber(process.env.APPROVAL_QUERY_START_LOOKBACK_MINUTES, 43200)
+    queryStartLookbackMinutes: parseNumber(process.env.APPROVAL_QUERY_START_LOOKBACK_MINUTES, 525600),
+    recoveryOverlapMinutes: parseNumber(process.env.APPROVAL_RECOVERY_OVERLAP_MINUTES, 120),
+    queryMaxPages: parseNumber(process.env.APPROVAL_QUERY_MAX_PAGES, 1000)
   },
   operations: {
     alertCooldownMinutes: parseNumber(process.env.OP_ALERT_COOLDOWN_MINUTES, 30)

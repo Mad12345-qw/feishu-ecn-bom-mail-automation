@@ -482,6 +482,8 @@ const server = http.createServer(async (req, res) => {
         approvalSyncConfigured: Boolean(config.approval.bomApprovalCodes.length),
         approvalSyncLookbackMinutes: config.approval.syncLookbackMinutes,
         approvalQueryStartLookbackMinutes: config.approval.queryStartLookbackMinutes,
+        approvalRecoveryOverlapMinutes: config.approval.recoveryOverlapMinutes,
+        approvalQueryMaxPages: config.approval.queryMaxPages,
         fieldMapping: {
           assemblyFactory: config.fieldMapping.assemblyFactory,
           bomAttachments: config.fieldMapping.bomAttachments,

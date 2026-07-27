@@ -46,6 +46,12 @@ services:
         value: BOM释放审批
       - key: APPROVAL_SYNC_LOOKBACK_MINUTES
         value: "30"
+      - key: APPROVAL_QUERY_START_LOOKBACK_MINUTES
+        value: "525600"
+      - key: APPROVAL_RECOVERY_OVERLAP_MINUTES
+        value: "120"
+      - key: APPROVAL_QUERY_MAX_PAGES
+        value: "1000"
       - key: UPSTASH_REDIS_REST_URL
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN

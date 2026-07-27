@@ -498,7 +498,7 @@ export async function syncConfiguredApprovalInstances() {
   }
 
   const now = Date.now();
-  const from = now - Math.max(1, config.approval.syncLookbackMinutes) * 60 * 1000;
+  const initialRecoveryFrom = now - Math.max(1, config.approval.syncLookbackMinutes) * 60 * 1000;
   const queryStartFrom = now - Math.max(
     Math.max(1, config.approval.syncLookbackMinutes),
     Math.max(1, config.approval.queryStartLookbackMinutes || 0)
@@ -508,11 +508,18 @@ export async function syncConfiguredApprovalInstances() {
 
   for (const approvalCode of config.approval.bomApprovalCodes) {
     try {
-      const instances = await queryApprovalInstances({
+      const recoveryKey = getApprovalRecoveryStateKey(approvalCode);
+      const recoveryState = await readPersistentRecordState(recoveryKey);
+      const previousCompletedThrough = Date.parse(recoveryState?.completedThrough || "");
+      const completionFrom = Number.isFinite(previousCompletedThrough)
+        ? Math.max(0, previousCompletedThrough - Math.max(1, config.approval.recoveryOverlapMinutes) * 60 * 1000)
+        : initialRecoveryFrom;
+      const query = await queryApprovalInstances({
         approvalCode,
         startTimeFrom: queryStartFrom,
         startTimeTo: now
       });
+      const instances = query.instances;
       const sourceResults = [];
       for (const instance of instances) {
         if (!isApprovedStatus(instance.status)) {
@@ -524,7 +531,7 @@ export async function syncConfiguredApprovalInstances() {
           });
           continue;
         }
-        const completionWindow = getApprovalCompletionWindowState(instance, from);
+        const completionWindow = getApprovalCompletionWindowState(instance, completionFrom);
         if (!completionWindow.ok) {
           sourceResults.push({
             instanceCode: instance.instanceCode,
@@ -565,15 +572,56 @@ export async function syncConfiguredApprovalInstances() {
         }
       }
       const failedCount = sourceResults.filter((item) => item.status === "send_failed").length;
+      let recoveryWriteFailed = false;
+      if (!failedCount) {
+        const stored = await writePersistentRecordState(recoveryKey, {
+          status: "scanned",
+          completedThrough: new Date(now).toISOString(),
+          scannedAt: new Date().toISOString(),
+          queryStartFrom: new Date(queryStartFrom).toISOString(),
+          queryPageCount: query.pageCount,
+          queryTotalCount: query.totalCount
+        });
+        recoveryWriteFailed = !stored;
+        if (recoveryWriteFailed) {
+          await sendOperationalAlert(
+            `approval_recovery_state_write_failed:${maskToken(approvalCode)}`,
+            [
+              "BOM/ECN mail automation alert",
+              "The approval recovery checkpoint could not be saved, so the next scan cannot safely confirm delivery coverage.",
+              "Action: check the configured Upstash Redis connection.",
+              `Time: ${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
+            ].join("\n")
+          );
+        }
+      }
+      const sourceError = failedCount
+        ? `${failedCount} approval item(s) failed`
+        : recoveryWriteFailed
+          ? "approval recovery checkpoint write failed"
+          : undefined;
       sources.push({
         approvalCode: maskToken(approvalCode),
         total: instances.length,
         processed: sourceResults.filter((item) => item.result?.result?.status === "sent").length,
-        error: failedCount ? `${failedCount} approval item(s) failed` : undefined,
+        completionFrom: new Date(completionFrom).toISOString(),
+        recoveryBootstrapped: !Number.isFinite(previousCompletedThrough),
+        queryPageCount: query.pageCount,
+        queryTotalCount: query.totalCount,
+        error: sourceError,
         results: sourceResults
       });
       results.push(...sourceResults.map((item) => ({ approvalCode: maskToken(approvalCode), ...item })));
     } catch (error) {
+      await sendOperationalAlert(
+        `approval_query_failed:${maskToken(approvalCode)}`,
+        [
+          "BOM/ECN mail automation alert",
+          "Approval recovery scan was incomplete. No checkpoint was advanced, so the next run will retry the same coverage.",
+          `Reason: ${error.message}`,
+          `Time: ${new Date().toLocaleString("zh-CN", { timeZone: "Asia/Shanghai" })}`
+        ].join("\n")
+      );
       sources.push({
         approvalCode: maskToken(approvalCode),
         total: 0,
@@ -1160,33 +1208,43 @@ async function fetchApprovalInstanceRecord(instanceCode) {
 async function queryApprovalInstances({ approvalCode, startTimeFrom, startTimeTo }) {
   const instances = [];
   let pageToken = "";
+  let pageCount = 0;
+  let totalCount = 0;
 
-  for (let page = 0; page < 20; page += 1) {
+  for (let page = 0; page < Math.max(1, config.approval.queryMaxPages); page += 1) {
     const body = {
       approval_code: approvalCode,
       instance_start_time_from: String(startTimeFrom),
       instance_start_time_to: String(startTimeTo),
       page_size: 100,
-      locale: "zh-CN",
-      ...(pageToken ? { page_token: pageToken } : {})
+      locale: "zh-CN"
     };
-    const data = await feishuApi("/approval/v4/instances/query", {
+    const queryString = pageToken ? `?page_token=${encodeURIComponent(pageToken)}` : "";
+    const data = await feishuApi(`/approval/v4/instances/query${queryString}`, {
       method: "POST",
       body: JSON.stringify(body)
     });
     const pageInstances = data.data?.instance_list || [];
     instances.push(...pageInstances);
+    pageCount += 1;
+    totalCount = Number(data.data?.count || totalCount || 0);
     const nextPageToken = data.data?.page_token
       || data.data?.pageToken
       || data.data?.next_page_token
       || data.data?.nextPageToken
       || "";
     const hasMore = Boolean(data.data?.has_more || data.data?.hasMore || nextPageToken);
-    if (!hasMore || !nextPageToken) break;
+    if (!hasMore || !nextPageToken) {
+      return {
+        instances: instances.map(normalizeQueriedApprovalInstance).filter((item) => item.instanceCode),
+        pageCount,
+        totalCount
+      };
+    }
     pageToken = nextPageToken;
   }
 
-  return instances.map(normalizeQueriedApprovalInstance).filter((item) => item.instanceCode);
+  throw new Error(`Approval query reached the configured page safety limit (${config.approval.queryMaxPages}) before completion`);
 }
 
 function normalizeQueriedApprovalInstance(item) {
@@ -1418,21 +1476,27 @@ async function readPersistentRecordState(recordKey) {
 }
 
 async function writePersistentRecordState(recordKey, state) {
-  if (!isUpstashConfigured()) return;
+  if (!isUpstashConfigured()) return false;
 
   try {
     await upstashRequest(`/set/${encodeURIComponent(getPersistentRecordStateKey(recordKey))}`, {
       method: "POST",
       body: JSON.stringify(state)
     });
+    return true;
   } catch {
     // Persistent dedupe is a protection layer; a write failure should not make a sent mail look failed.
+    return false;
   }
 }
 
 function getPersistentRecordStateKey(recordKey) {
   const hash = crypto.createHash("sha256").update(recordKey).digest("hex");
   return `feishu:bitable-record-state:${hash}`;
+}
+
+function getApprovalRecoveryStateKey(approvalCode) {
+  return `approval-sync-recovery:${approvalCode}`;
 }
 
 function isUpstashConfigured() {
