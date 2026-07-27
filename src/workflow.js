@@ -1206,12 +1206,43 @@ async function fetchApprovalInstanceRecord(instanceCode) {
 }
 
 async function queryApprovalInstances({ approvalCode, startTimeFrom, startTimeTo }) {
+  const allInstances = new Map();
+  let pageCount = 0;
+  let totalCount = 0;
+  const maxRangeMs = 30 * 24 * 60 * 60 * 1000;
+  let rangeStart = Number(startTimeFrom);
+  const finalRangeEnd = Number(startTimeTo);
+
+  while (rangeStart <= finalRangeEnd) {
+    const rangeEnd = Math.min(finalRangeEnd, rangeStart + maxRangeMs - 1);
+    const rangeResult = await queryApprovalInstancesForTimeRange({
+      approvalCode,
+      startTimeFrom: rangeStart,
+      startTimeTo: rangeEnd,
+      remainingPages: Math.max(0, Math.max(1, config.approval.queryMaxPages) - pageCount)
+    });
+    pageCount += rangeResult.pageCount;
+    totalCount += rangeResult.totalCount;
+    for (const instance of rangeResult.instances) {
+      allInstances.set(instance.instanceCode, instance);
+    }
+    rangeStart = rangeEnd + 1;
+  }
+
+  return {
+    instances: [...allInstances.values()],
+    pageCount,
+    totalCount
+  };
+}
+
+async function queryApprovalInstancesForTimeRange({ approvalCode, startTimeFrom, startTimeTo, remainingPages }) {
   const instances = [];
   let pageToken = "";
   let pageCount = 0;
   let totalCount = 0;
 
-  for (let page = 0; page < Math.max(1, config.approval.queryMaxPages); page += 1) {
+  for (let page = 0; page < remainingPages; page += 1) {
     const body = {
       approval_code: approvalCode,
       instance_start_time_from: String(startTimeFrom),
