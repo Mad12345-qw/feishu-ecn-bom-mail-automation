@@ -21,7 +21,13 @@ async function requestJson(url, options = {}) {
     }
   });
   const text = await response.text();
-  const data = text ? JSON.parse(text) : {};
+  let data = {};
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch {
+    const contentType = response.headers.get("content-type") || "unknown";
+    throw new Error(`Feishu API returned non-JSON response (HTTP ${response.status}, content-type ${contentType})`);
+  }
   if (!response.ok || (data.code && data.code !== 0)) {
     const message = data.msg || data.message || response.statusText;
     throw new Error(`Feishu API failed: ${message}`);

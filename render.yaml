@@ -52,6 +52,8 @@ services:
         value: "120"
       - key: APPROVAL_QUERY_MAX_PAGES
         value: "1000"
+      - key: APPROVAL_QUERY_RETRY_ATTEMPTS
+        value: "3"
       - key: UPSTASH_REDIS_REST_URL
         sync: false
       - key: UPSTASH_REDIS_REST_TOKEN

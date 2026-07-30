@@ -1251,10 +1251,7 @@ async function queryApprovalInstancesForTimeRange({ approvalCode, startTimeFrom,
       locale: "zh-CN"
     };
     const queryString = pageToken ? `?page_token=${encodeURIComponent(pageToken)}` : "";
-    const data = await feishuApi(`/approval/v4/instances/query${queryString}`, {
-      method: "POST",
-      body: JSON.stringify(body)
-    });
+    const data = await queryApprovalPageWithRetry(`/approval/v4/instances/query${queryString}`, body);
     const pageInstances = data.data?.instance_list || [];
     instances.push(...pageInstances);
     pageCount += 1;
@@ -1276,6 +1273,31 @@ async function queryApprovalInstancesForTimeRange({ approvalCode, startTimeFrom,
   }
 
   throw new Error(`Approval query reached the configured page safety limit (${config.approval.queryMaxPages}) before completion`);
+}
+
+async function queryApprovalPageWithRetry(path, body) {
+  const attempts = Math.max(1, config.approval.queryRetryAttempts);
+  let lastError = null;
+
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await feishuApi(path, {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+    } catch (error) {
+      lastError = error;
+      if (attempt === attempts || !isTransientApprovalQueryError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, attempt * 1000));
+    }
+  }
+
+  throw lastError || new Error("Approval query failed");
+}
+
+function isTransientApprovalQueryError(error) {
+  const message = String(error?.message || error || "");
+  return /non-JSON|unexpected token|\b408\b|\b429\b|\b5\d\d\b|fetch failed|network|socket|timeout/i.test(message);
 }
 
 function normalizeQueriedApprovalInstance(item) {

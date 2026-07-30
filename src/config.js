@@ -19,6 +19,7 @@ const CONFIG_AUDIT_KEYS = [
   "APPROVAL_QUERY_START_LOOKBACK_MINUTES",
   "APPROVAL_RECOVERY_OVERLAP_MINUTES",
   "APPROVAL_QUERY_MAX_PAGES",
+  "APPROVAL_QUERY_RETRY_ATTEMPTS",
   "PUBLIC_BASE_URL",
   "SAFE_TEST_MODE",
   "EMAIL_DRY_RUN",
@@ -213,7 +214,8 @@ export const config = {
     syncLookbackMinutes: parseNumber(process.env.APPROVAL_SYNC_LOOKBACK_MINUTES, 30),
     queryStartLookbackMinutes: parseNumber(process.env.APPROVAL_QUERY_START_LOOKBACK_MINUTES, 525600),
     recoveryOverlapMinutes: parseNumber(process.env.APPROVAL_RECOVERY_OVERLAP_MINUTES, 120),
-    queryMaxPages: parseNumber(process.env.APPROVAL_QUERY_MAX_PAGES, 1000)
+    queryMaxPages: parseNumber(process.env.APPROVAL_QUERY_MAX_PAGES, 1000),
+    queryRetryAttempts: parseNumber(process.env.APPROVAL_QUERY_RETRY_ATTEMPTS, 3)
   },
   operations: {
     alertCooldownMinutes: parseNumber(process.env.OP_ALERT_COOLDOWN_MINUTES, 30)
