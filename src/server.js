@@ -87,6 +87,8 @@ function appendLog(entry) {
   console.log(JSON.stringify(payload));
 }
 
+const serviceStartedAt = Date.now();
+
 const approvalSyncState = {
   running: false,
   startedAt: null,
