@@ -91,6 +91,8 @@ const approvalSyncState = {
   running: false,
   startedAt: null,
   finishedAt: null,
+  lastSuccessAt: null,
+  lastTrigger: null,
   lastStatus: null,
   lastSummary: null,
   lastError: null
@@ -103,6 +105,8 @@ function publicApprovalSyncState() {
     running: approvalSyncState.running,
     startedAt: approvalSyncState.startedAt,
     finishedAt: approvalSyncState.finishedAt,
+    lastSuccessAt: approvalSyncState.lastSuccessAt,
+    lastTrigger: approvalSyncState.lastTrigger,
     lastStatus: approvalSyncState.lastStatus,
     lastSummary: approvalSyncState.lastSummary,
     lastError: approvalSyncState.lastError,
@@ -119,6 +123,7 @@ function startApprovalSyncInBackground(trigger = "cron") {
 
   approvalSyncState.running = true;
   approvalSyncState.startedAt = new Date().toISOString();
+  approvalSyncState.lastTrigger = trigger;
   approvalSyncState.finishedAt = null;
   approvalSyncState.lastStatus = "running";
   approvalSyncState.lastError = null;
@@ -129,6 +134,9 @@ function startApprovalSyncInBackground(trigger = "cron") {
       const summary = summarizeSyncResult(result);
       approvalSyncState.lastStatus = result.status || "synced";
       approvalSyncState.lastSummary = summary;
+      if (result.status === "synced") {
+        approvalSyncState.lastSuccessAt = new Date().toISOString();
+      }
       appendLog({ type: "approval_sync", trigger, mode: "background", result: summary });
     } catch (error) {
       approvalSyncState.lastStatus = "failed";
@@ -141,6 +149,50 @@ function startApprovalSyncInBackground(trigger = "cron") {
   });
 
   return { started: true, state: publicApprovalSyncState() };
+}
+
+function approvalSyncIsStale() {
+  const staleMs = Math.max(1, config.approval.syncStaleMinutes) * 60 * 1000;
+  const lastActivityAt = Date.parse(
+    approvalSyncState.finishedAt
+    || approvalSyncState.startedAt
+    || new Date(serviceStartedAt).toISOString()
+  );
+  return Date.now() - lastActivityAt >= staleMs;
+}
+
+function recoverStaleApprovalSync(trigger) {
+  if (!config.approval.autoSyncEnabled || approvalSyncState.running || !approvalSyncIsStale()) {
+    return { started: false, state: publicApprovalSyncState() };
+  }
+  return startApprovalSyncInBackground(trigger);
+}
+
+function initializeApprovalSyncScheduler() {
+  if (!config.approval.autoSyncEnabled) {
+    appendLog({ type: "approval_sync_scheduler", status: "disabled" });
+    return;
+  }
+
+  const startupDelayMs = Math.max(0, config.approval.startupSyncDelaySeconds) * 1000;
+  const intervalMs = Math.max(1, config.approval.internalSyncIntervalMinutes) * 60 * 1000;
+  const startupTimer = setTimeout(() => {
+    startApprovalSyncInBackground("startup_recovery");
+  }, startupDelayMs);
+  startupTimer.unref();
+
+  const intervalTimer = setInterval(() => {
+    startApprovalSyncInBackground("internal_interval");
+  }, intervalMs);
+  intervalTimer.unref();
+
+  appendLog({
+    type: "approval_sync_scheduler",
+    status: "started",
+    startupDelaySeconds: config.approval.startupSyncDelaySeconds,
+    intervalMinutes: config.approval.internalSyncIntervalMinutes,
+    staleMinutes: config.approval.syncStaleMinutes
+  });
 }
 
 function readRecentEvents() {
@@ -217,6 +269,9 @@ async function runOperationalSelfCheck({ notify = true } = {}) {
   }
   if (approvalState.running && approvalState.elapsedSeconds > 300) {
     issues.push(`审批同步运行时间超过 5 分钟：${approvalState.elapsedSeconds} 秒`);
+  }
+  if (config.approval.autoSyncEnabled && approvalSyncIsStale()) {
+    issues.push(`审批同步已超过 ${config.approval.syncStaleMinutes} 分钟没有活动，系统将自动重新拉起。`);
   }
 
   const result = {
@@ -452,6 +507,7 @@ const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, `http://${req.headers.host}`);
 
     if (req.method === "GET" && url.pathname === "/health") {
+      const staleRecovery = recoverStaleApprovalSync("health_stale_recovery");
       const envQualityIssues = configQualityIssues();
       const userMailAuth = await getUserAuthStatus();
       return sendJson(res, 200, {
@@ -485,6 +541,11 @@ const server = http.createServer(async (req, res) => {
         approvalRecoveryOverlapMinutes: config.approval.recoveryOverlapMinutes,
         approvalQueryMaxPages: config.approval.queryMaxPages,
         approvalQueryRetryAttempts: config.approval.queryRetryAttempts,
+        approvalAutoSyncEnabled: config.approval.autoSyncEnabled,
+        approvalInternalSyncIntervalMinutes: config.approval.internalSyncIntervalMinutes,
+        approvalStartupSyncDelaySeconds: config.approval.startupSyncDelaySeconds,
+        approvalSyncStaleMinutes: config.approval.syncStaleMinutes,
+        approvalStaleRecoveryStarted: staleRecovery.started,
         fieldMapping: {
           assemblyFactory: config.fieldMapping.assemblyFactory,
           bomAttachments: config.fieldMapping.bomAttachments,
@@ -570,6 +631,7 @@ const server = http.createServer(async (req, res) => {
 
 server.listen(config.port, () => {
   console.log(`Feishu mail automation service listening on http://localhost:${config.port}`);
+  initializeApprovalSyncScheduler();
 });
 
 function escapeHtml(value) {

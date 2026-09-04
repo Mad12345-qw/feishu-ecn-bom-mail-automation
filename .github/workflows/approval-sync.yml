@@ -1,0 +1,26 @@
+name: Approval sync watchdog
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: approval-sync-watchdog
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: vars.APPROVAL_SYNC_SCHEDULER_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Trigger compact approval sync
+        env:
+          APPROVAL_SYNC_URL: ${{ secrets.APPROVAL_SYNC_URL }}
+        run: |
+          test -n "$APPROVAL_SYNC_URL"
+          curl --fail --silent --show-error --max-time 30 --request POST "$APPROVAL_SYNC_URL"

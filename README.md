@@ -134,6 +134,17 @@ APPROVAL_QUERY_RETRY_ATTEMPTS=3
 https://你的-render-service.onrender.com/sync/approvals?token=你的VerificationToken
 ```
 
+正式环境采用多层触发保障：飞书审批事件负责实时触发；服务启动时自动补扫；服务存活期间每 5 分钟自动扫描；健康检查发现长时间没有扫描时自动恢复；GitHub Actions 再提供一条独立的 5 分钟备用调用。Upstash 保存恢复进度和已发送状态，多条触发路径同时工作时，已成功发送的审批仍会被去重。
+
+```text
+APPROVAL_AUTO_SYNC_ENABLED=true
+APPROVAL_INTERNAL_SYNC_INTERVAL_MINUTES=5
+APPROVAL_STARTUP_SYNC_DELAY_SECONDS=10
+APPROVAL_SYNC_STALE_MINUTES=20
+```
+
+GitHub Actions 备用调用使用仓库 Secret `APPROVAL_SYNC_URL` 保存完整的受保护同步地址，并用仓库 Variable `APPROVAL_SYNC_SCHEDULER_ENABLED=true` 启用。部署检查期间可暂时设为 `false`，避免未确认的历史审批立即补发。
+
 `/sync/bitable` 仅作为历史兼容和多维表排查使用，不建议作为正式唯一触发源。
 
 切换正式表时建议先设置：
