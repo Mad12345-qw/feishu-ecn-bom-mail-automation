@@ -266,6 +266,9 @@ async function runOperationalSelfCheck({ notify = true } = {}) {
   if (!isMailAuthSendReady(userMailAuth)) {
     issues.push("飞书发件邮箱授权不可用，需要点击授权链接重新授权。");
   }
+  if (userMailAuth.refreshError) {
+    issues.push(`飞书发件邮箱自动续期失败：${userMailAuth.refreshError}`);
+  }
   if (approvalState.lastStatus === "failed" || approvalState.lastStatus === "partial") {
     issues.push(`最近一次审批同步状态异常：${approvalState.lastStatus}${approvalState.lastError ? `，${approvalState.lastError}` : ""}`);
   }

@@ -7,10 +7,12 @@ const FEISHU_BASE_URL = "https://open.feishu.cn/open-apis";
 const FEISHU_AUTH_URL = "https://accounts.feishu.cn/open-apis/authen/v1/authorize";
 const USER_TOKEN_PATH = path.join(config.rootDir, "data", "feishu-user-token.json");
 const USER_TOKEN_ENV_KEY = "FEISHU_USER_TOKEN_B64";
+const USER_TOKEN_REFRESH_LEEWAY_MS = 30 * 60 * 1000;
 
 let cachedTenantToken = null;
 let cachedTenantTokenExpiresAt = 0;
 let cachedUserToken = null;
+let userTokenRefreshPromise = null;
 
 async function requestJson(url, options = {}) {
   const response = await fetch(url, {
@@ -223,27 +225,46 @@ export async function refreshUserAccessToken(refreshToken) {
 
 export async function getUserAccessToken() {
   const stored = await readUserToken();
+  const now = Date.now();
   if (!stored?.access_token && !stored?.refresh_token) {
     throw new Error("Missing Feishu user authorization. Open /oauth/feishu/start first.");
   }
 
-  if (stored.access_token && stored.access_token_expires_at > Date.now() + 60_000) {
+  if (stored.access_token && stored.access_token_expires_at > now + USER_TOKEN_REFRESH_LEEWAY_MS) {
     return stored.access_token;
   }
 
-  if (!stored.refresh_token) {
+  if (!hasUsableRefreshToken(stored, now)) {
+    if (stored.access_token && stored.access_token_expires_at > now + 60_000) {
+      return stored.access_token;
+    }
     throw new Error("Feishu user access token expired and no refresh token was returned. Please reauthorize.");
   }
 
-  const refreshed = await refreshUserAccessToken(stored.refresh_token);
-  return refreshed.access_token;
+  try {
+    const refreshed = await refreshUserTokenOnce(stored);
+    return refreshed.access_token;
+  } catch (error) {
+    if (stored.access_token && stored.access_token_expires_at > now + 60_000) {
+      return stored.access_token;
+    }
+    throw error;
+  }
 }
 
 export async function getUserAuthStatus() {
   let stored = null;
   let readError = "";
+  let refreshError = "";
   try {
     stored = await readUserToken();
+    if (shouldRefreshUserToken(stored)) {
+      try {
+        stored = await refreshUserTokenOnce(stored);
+      } catch (error) {
+        refreshError = error.message;
+      }
+    }
   } catch (error) {
     readError = error.message;
   }
@@ -255,8 +276,32 @@ export async function getUserAuthStatus() {
     refreshTokenValid: Boolean(stored?.refresh_token && stored.refresh_token_expires_at > Date.now() + 60_000),
     persistentStoreConfigured: isUpstashConfigured(),
     persistentStore: isUpstashConfigured() ? "upstash" : "local",
-    ...(readError ? { readError } : {})
+    ...(readError ? { readError } : {}),
+    ...(refreshError ? { refreshError } : {})
   };
+}
+
+export function shouldRefreshUserToken(stored, now = Date.now()) {
+  if (!stored?.access_token) return hasUsableRefreshToken(stored, now);
+  return stored.access_token_expires_at <= now + USER_TOKEN_REFRESH_LEEWAY_MS
+    && hasUsableRefreshToken(stored, now);
+}
+
+function hasUsableRefreshToken(stored, now = Date.now()) {
+  return Boolean(
+    stored?.refresh_token
+    && stored.refresh_token_expires_at > now + 60_000
+  );
+}
+
+async function refreshUserTokenOnce(stored) {
+  if (!userTokenRefreshPromise) {
+    userTokenRefreshPromise = refreshUserAccessToken(stored.refresh_token)
+      .finally(() => {
+        userTokenRefreshPromise = null;
+      });
+  }
+  return userTokenRefreshPromise;
 }
 
 export async function exportUserTokenForRenderEnv() {

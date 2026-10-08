@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { shouldRefreshUserToken } from "../src/feishuClient.js";
 import { buildMailHtml, buildRecipientRoute, collectAttachmentRefs, routeByAssemblyFactory } from "../src/workflow.js";
 
 const sampleRecord = {
@@ -60,6 +61,26 @@ assert.equal(html.includes("TEST测试审批发送邮件功能变更后2"), true
 assert.equal(html.includes("TEST测试审批发送邮件功能变更前3"), true);
 assert.equal(html.includes("TEST测试审批发送邮件功能变更后3"), true);
 assert.equal(html.includes("立即变更"), true);
+
+const tokenNow = Date.now();
+assert.equal(shouldRefreshUserToken({
+  access_token: "access",
+  refresh_token: "refresh",
+  access_token_expires_at: tokenNow + 15 * 60 * 1000,
+  refresh_token_expires_at: tokenNow + 7 * 24 * 60 * 60 * 1000
+}, tokenNow), true);
+assert.equal(shouldRefreshUserToken({
+  access_token: "access",
+  refresh_token: "refresh",
+  access_token_expires_at: tokenNow + 60 * 60 * 1000,
+  refresh_token_expires_at: tokenNow + 7 * 24 * 60 * 60 * 1000
+}, tokenNow), false);
+assert.equal(shouldRefreshUserToken({
+  access_token: "access",
+  refresh_token: "refresh",
+  access_token_expires_at: tokenNow + 15 * 60 * 1000,
+  refresh_token_expires_at: tokenNow + 30_000
+}, tokenNow), false);
 
 console.log(JSON.stringify({
   route,

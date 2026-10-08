@@ -145,6 +145,8 @@ APPROVAL_SYNC_STALE_MINUTES=20
 
 GitHub Actions 备用调用使用仓库 Secret `APPROVAL_SYNC_URL` 保存完整的受保护同步地址，并用仓库 Variable `APPROVAL_SYNC_SCHEDULER_ENABLED=true` 启用。部署检查期间可暂时设为 `false`，避免未确认的历史审批立即补发。
 
+飞书邮箱用户令牌保存在 Upstash。后台扫描和健康检查会在访问令牌即将到期时自动刷新，并把轮换后的刷新令牌重新写入 Upstash；正常运行时客户不需要周期性重新授权。只有用户主动撤销授权、应用权限被回收，或飞书返回不可恢复的刷新错误时，系统才会在飞书群发送新的授权链接。
+
 `/sync/bitable` 仅作为历史兼容和多维表排查使用，不建议作为正式唯一触发源。
 
 切换正式表时建议先设置：
